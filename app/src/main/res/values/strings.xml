@@ -22,6 +22,13 @@
     <string name="more_options">More options</string>
     <string name="feed_settings_open">Settings for this Feed</string>
     <string name="feed_settings_title">Settings for %1$s</string>
+    <string name="view_mode">View Mode</string>
+    <string name="view_mode_feed_content">Feed Content</string>
+    <string name="view_mode_feed_content_hint">The Article as the Server delivers it.</string>
+    <string name="view_mode_original_page">Original Page</string>
+    <string name="view_mode_original_page_hint">The Article\'s web page, in the in-app browser.</string>
+    <string name="open_in_browser">Open in browser</string>
+    <string name="share">Share</string>
     <string name="bonus_text">Bonus Text</string>
     <string name="bonus_text_hint">Shows text this Feed hides from view: the title of each image below it, and the subject of mail links at the end.</string>
     <string name="sync_failed_title">Read marks not sent</string>
