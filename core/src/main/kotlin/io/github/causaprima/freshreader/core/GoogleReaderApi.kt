@@ -10,6 +10,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import java.io.IOException
 
 internal sealed interface ApiResult<out T> {
@@ -21,6 +22,8 @@ internal sealed interface ApiResult<out T> {
 internal class GoogleReaderApi private constructor(private val http: OkHttpClient, private val apiBase: HttpUrl) {
 
     private var auth: String? = null
+    /** The action token `edit-tag` requires, fetched once per session. */
+    private var actionToken: String? = null
 
     suspend fun logIn(username: String, apiPassword: String): Outcome {
         val request = Request.Builder()
@@ -85,9 +88,29 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
         return ApiResult.Success(articles)
     }
 
-    private fun authorized(url: HttpUrl) = Request.Builder()
+    /** Marks the Articles with these ids as read on the Server. */
+    suspend fun markRead(articleIds: List<String>): Outcome {
+        val token = actionToken ?: when (val result = execute(authorized(endpoint("token")))) {
+            is ApiResult.Failure -> return result.outcome
+            is ApiResult.Success -> result.value.trim().also { actionToken = it }
+        }
+        val form = FormBody.Builder()
+            .add("T", token)
+            .add("a", READ_STATE)
+            .apply { articleIds.forEach { add("i", it) } }
+            .build()
+        return when (val result = execute(authorized(endpoint("edit-tag"), form))) {
+            is ApiResult.Failure -> result.outcome
+            is ApiResult.Success -> Outcome.Ok
+        }
+    }
+
+    private fun endpoint(name: String) = apiBase.newBuilder().addPathSegments("reader/api/0/$name").build()
+
+    private fun authorized(url: HttpUrl, form: RequestBody? = null) = Request.Builder()
         .url(url)
         .header("Authorization", "GoogleLogin auth=$auth")
+        .apply { if (form != null) post(form) }
         .build()
 
     private suspend fun execute(request: Request): ApiResult<String> = withContext(Dispatchers.IO) {
@@ -160,6 +183,7 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
         }
 
         private const val PAGE_SIZE = 1000
+        private const val READ_STATE = "user/-/state/com.google/read"
         private val json = Json { ignoreUnknownKeys = true }
     }
 }

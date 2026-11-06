@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,6 +40,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -51,10 +53,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -65,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
+import io.github.causaprima.freshreader.core.SyncStatus
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.Instant
@@ -81,6 +86,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             FreshReaderTheme {
                 val screen by viewModel.screen.collectAsStateWithLifecycle()
+                val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
                 // Lives outside the screens so that the list keeps its position while an Article is open.
                 val listState = rememberLazyListState()
                 when (val s = screen) {
@@ -88,7 +94,7 @@ class MainActivity : ComponentActivity() {
                     is Screen.Login -> LoginScreen(s, viewModel::logIn)
                     is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry)
                     is Screen.Articles -> ArticleListScreen(
-                        s.sections, listState, viewModel::openArticle, viewModel::openReadingOrder,
+                        s.sections, syncStatus, listState, viewModel::openArticle, viewModel::openReadingOrder,
                     )
                     is Screen.ArticleView -> ArticleViewScreen(s.article, s.document, viewModel::closeArticle)
                     is Screen.ReadingOrder -> ReadingOrderScreen(
@@ -179,12 +185,16 @@ private fun FailedScreen(outcome: Outcome, onRetry: () -> Unit) {
     }
 }
 
+/** Read Articles stay in the list until the next refresh, greyed out. */
+private const val READ_ALPHA = 0.45f
+
 private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ArticleListScreen(
     sections: List<Section>,
+    syncStatus: SyncStatus,
     listState: LazyListState,
     onOpenArticle: (Article) -> Unit,
     onOpenReadingOrder: () -> Unit,
@@ -195,6 +205,7 @@ private fun ArticleListScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.list_title, total)) },
                 actions = {
+                    if (syncStatus is SyncStatus.Failed) SyncFailedHint(syncStatus)
                     IconButton(onClick = onOpenReadingOrder) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.reading_order_title))
                     }
@@ -217,6 +228,28 @@ private fun ArticleListScreen(
     }
 }
 
+/** The subtle hint that read marks permanently failed to reach the Server; tapping it explains why. */
+@Composable
+private fun SyncFailedHint(status: SyncStatus.Failed) {
+    var explained by rememberSaveable { mutableStateOf(false) }
+    IconButton(onClick = { explained = true }) {
+        Icon(
+            painterResource(R.drawable.ic_cloud_off), stringResource(R.string.sync_failed_title),
+            tint = MaterialTheme.colorScheme.error,
+        )
+    }
+    if (explained) {
+        AlertDialog(
+            onDismissRequest = { explained = false },
+            confirmButton = { TextButton(onClick = { explained = false }) { Text(stringResource(android.R.string.ok)) } },
+            title = { Text(stringResource(R.string.sync_failed_title)) },
+            text = {
+                Text(pluralStringResource(R.plurals.sync_failed_message, status.count, status.count, outcomeMessage(status.reason)))
+            },
+        )
+    }
+}
+
 @Composable
 private fun SectionHeader(section: Section) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
@@ -235,7 +268,12 @@ private fun SectionHeader(section: Section) {
 
 @Composable
 private fun ArticleEntry(article: Article, onOpen: (Article) -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable { onOpen(article) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clickable { onOpen(article) }
+            .alpha(if (article.read) READ_ALPHA else 1f)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
         Text(article.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
         Text(
             "${article.feedTitle} · ${dateFormat.format(Instant.ofEpochSecond(article.published))}",

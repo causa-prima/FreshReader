@@ -7,6 +7,7 @@ import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
+import io.github.causaprima.freshreader.core.SyncStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +36,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _screen = MutableStateFlow<Screen>(Screen.Loading)
     val screen: StateFlow<Screen> = _screen
 
+    /** Whether the read marks have reached the Server; a permanent failure shows as a hint. */
+    val syncStatus: StateFlow<SyncStatus> = core.syncStatus
+
+    /** The read rule of the last opened Article, applied while the Article View is shown. */
+    private var opening: Job? = null
+
     /** The last Reading Order change still being stored; changes are applied one after another. */
     private var readingOrderChange: Job? = null
 
@@ -60,11 +67,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openArticle(article: Article) {
+        val position = core.articles.indexOfFirst { it.id == article.id }
         _screen.value = Screen.ArticleView(article, core.prepareArticleView(article))
+        opening = viewModelScope.launch { core.openArticle(position) }
     }
 
     fun closeArticle() {
-        _screen.value = Screen.Articles(core.sections)
+        viewModelScope.launch {
+            opening?.join()
+            _screen.value = Screen.Articles(core.sections)
+        }
     }
 
     fun openReadingOrder() {
@@ -86,6 +98,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _screen.value = Screen.Articles(core.sections)
         }
     }
+
+    override fun onCleared() = core.close()
 
     private suspend fun refresh() {
         _screen.value = when (val outcome = withContext(Dispatchers.IO) { core.refresh() }) {
