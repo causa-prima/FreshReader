@@ -1,0 +1,128 @@
+package io.github.causaprima.freshreader.core
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import okhttp3.FormBody
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.IOException
+
+internal sealed interface ApiResult<out T> {
+    data class Success<T>(val value: T) : ApiResult<T>
+    data class Failure(val outcome: Outcome) : ApiResult<Nothing>
+}
+
+/** Client for FreshRSS's Google Reader API (`/api/greader.php`). */
+internal class GoogleReaderApi private constructor(private val http: OkHttpClient, private val apiBase: HttpUrl) {
+
+    private var auth: String? = null
+
+    suspend fun logIn(username: String, apiPassword: String): Outcome {
+        val request = Request.Builder()
+            .url(apiBase.newBuilder().addPathSegments("accounts/ClientLogin").build())
+            .post(FormBody.Builder().add("Email", username).add("Passwd", apiPassword).build())
+            .build()
+        return when (val result = execute(request)) {
+            is ApiResult.Failure -> result.outcome
+            is ApiResult.Success -> {
+                auth = result.value.lineSequence()
+                    .firstOrNull { it.startsWith("Auth=") }
+                    ?.removePrefix("Auth=")
+                if (auth == null) Outcome.ServerError(200) else Outcome.Ok
+            }
+        }
+    }
+
+    /** All unread Articles, oldest crawled first, following `continuation` until the last page. */
+    suspend fun unreadArticles(): ApiResult<List<Article>> {
+        val articles = mutableListOf<Article>()
+        val seenContinuations = mutableSetOf<String>()
+        var continuation: String? = null
+        do {
+            val url = apiBase.newBuilder()
+                .addPathSegments("reader/api/0/stream/contents/user/-/state/com.google/reading-list")
+                .addQueryParameter("xt", "user/-/state/com.google/read")
+                .addQueryParameter("r", "o")
+                .addQueryParameter("n", PAGE_SIZE.toString())
+                .apply { continuation?.let { addQueryParameter("c", it) } }
+                .build()
+            val page = when (val result = execute(authorized(url))) {
+                is ApiResult.Failure -> return result
+                is ApiResult.Success -> try {
+                    json.decodeFromString<StreamContents>(result.value)
+                } catch (e: SerializationException) {
+                    return ApiResult.Failure(Outcome.ServerError(200))
+                }
+            }
+            articles += page.items.map { it.toArticle() }
+            continuation = page.continuation?.takeIf { page.items.isNotEmpty() && seenContinuations.add(it) }
+        } while (continuation != null)
+        return ApiResult.Success(articles)
+    }
+
+    private fun authorized(url: HttpUrl) = Request.Builder()
+        .url(url)
+        .header("Authorization", "GoogleLogin auth=$auth")
+        .build()
+
+    private suspend fun execute(request: Request): ApiResult<String> = withContext(Dispatchers.IO) {
+        try {
+            http.newCall(request).execute().use { response ->
+                when {
+                    response.isSuccessful -> ApiResult.Success(response.body.string())
+                    response.code == 401 || response.code == 400 && request.isLogin() ->
+                        ApiResult.Failure(Outcome.WrongCredentials)
+                    else -> ApiResult.Failure(Outcome.ServerError(response.code))
+                }
+            }
+        } catch (e: IOException) {
+            ApiResult.Failure(Outcome.Unreachable(e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    private fun Request.isLogin() = url.encodedPath.endsWith("/accounts/ClientLogin")
+
+    @Serializable
+    private class StreamContents(val items: List<Item> = emptyList(), val continuation: String? = null)
+
+    @Serializable
+    private class Item(
+        val id: String,
+        val title: String = "",
+        val published: Long = 0,
+        val alternate: List<Link> = emptyList(),
+        val origin: Origin? = null,
+    ) {
+        fun toArticle() = Article(
+            id = id,
+            title = title,
+            feedTitle = origin?.title.orEmpty(),
+            published = published,
+            url = alternate.firstOrNull()?.href,
+        )
+    }
+
+    @Serializable
+    private class Link(val href: String)
+
+    @Serializable
+    private class Origin(val title: String? = null)
+
+    companion object {
+        /** Accepts the FreshRSS root URL or its `/api/greader.php` URL; null if it is not an http(s) URL. */
+        fun forServer(http: OkHttpClient, serverUrl: String): GoogleReaderApi? {
+            val base = serverUrl.trim().trimEnd('/').let {
+                if (it.endsWith("/api/greader.php")) it else "$it/api/greader.php"
+            }.toHttpUrlOrNull() ?: return null
+            return GoogleReaderApi(http, base)
+        }
+
+        private const val PAGE_SIZE = 1000
+        private val json = Json { ignoreUnknownKeys = true }
+    }
+}
