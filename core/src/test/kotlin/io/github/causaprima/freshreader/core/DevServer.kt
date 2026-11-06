@@ -12,7 +12,9 @@ fun main() {
     listOf(
         "Golem.de" to "News", "ComputerBase" to "News", "xkcd" to "Pictures", "Dinosaur Comics" to "Pictures",
         "Der Postillon" to "Leisure", "FreshRSS releases" to "Updates", "Stellenmarkt" to "Job",
-    ).forEach { (feed, category) -> server.addFeed(feed, category) }
+    ).forEach { (feed, category) ->
+        server.addFeed(feed, category, icon = devFavicons[feed]?.let(::download), iconListed = feed != "Stellenmarkt")
+    }
     val feeds = server.feeds.map { it.title }
     val start = System.currentTimeMillis() / 1000 - 3 * 24 * 3600
     repeat(25) { i ->
@@ -29,6 +31,22 @@ fun main() {
     println("Fake FreshRSS listening on ${server.url} (emulator, after adb reverse: http://127.0.0.1:8085)")
     Thread.currentThread().join()
 }
+
+/**
+ * Real favicons, loaded when the dev server starts: an ICO, a PNG and an SVG (GitHub's, as FreshRSS would pick
+ * for FreshRSS releases). Dinosaur Comics gets FreshRSS's default icon, Stellenmarkt no iconUrl at all.
+ */
+private val devFavicons = mapOf(
+    "Golem.de" to "https://www.golem.de/favicon.ico",
+    "ComputerBase" to "https://www.computerbase.de/favicon.ico",
+    "xkcd" to "https://xkcd.com/s/919f27.ico",
+    "Der Postillon" to "https://www.der-postillon.com/favicon.ico",
+    "FreshRSS releases" to "https://github.githubassets.com/favicons/favicon.svg",
+)
+
+private fun download(url: String): ByteArray? = runCatching { java.net.URI(url).toURL().readBytes() }
+    .onFailure { println("Could not load the favicon $url: $it") }
+    .getOrNull()
 
 /** Feed Content resembling what these Feeds deliver, to check the Article View's layout. */
 private fun devContent(feed: String): String = when (feed) {

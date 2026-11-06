@@ -16,6 +16,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.annotation.StringRes
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -35,6 +38,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -77,6 +81,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -84,6 +90,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,10 +108,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -129,6 +133,8 @@ class MainActivity : ComponentActivity() {
                     is Screen.Articles -> ArticleListScreen(
                         s, syncStatus, listState,
                         ListActions(
+                            age = viewModel::age,
+                            favicon = viewModel::favicon,
                             onOpenArticle = viewModel::openArticle,
                             onOpenReadingOrder = viewModel::openReadingOrder,
                             onRefresh = viewModel::pullToRefresh,
@@ -241,10 +247,11 @@ private const val READ_ALPHA = 0.45f
 /** Material's opacity for disabled content. */
 private const val DISABLED_ALPHA = 0.38f
 
-private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
 
 /** What the reader can do on the list screen. */
 private class ListActions(
+    val age: (Article) -> String,
+    val favicon: suspend (Article) -> ImageBitmap?,
     val onOpenArticle: (Article) -> Unit,
     val onOpenReadingOrder: () -> Unit,
     val onRefresh: () -> Unit,
@@ -300,7 +307,7 @@ private fun ArticleListScreen(
                 }
                 sections.forEach { section ->
                     stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
-                    items(section.articles, key = { it.id }) { article -> ArticleEntry(article, actions.onOpenArticle) }
+                    items(section.articles, key = { it.id }) { article -> ArticleEntry(article, actions) }
                 }
                 if (total > 0) {
                     item(key = "mark-all") {
@@ -378,21 +385,66 @@ private fun SectionHeader(section: Section) {
 }
 
 @Composable
-private fun ArticleEntry(article: Article, onOpen: (Article) -> Unit) {
-    Column(
+private fun ArticleEntry(article: Article, actions: ListActions) {
+    Row(
         Modifier.fillMaxWidth()
-            .clickable { onOpen(article) }
+            .clickable { actions.onOpenArticle(article) }
             .alpha(if (article.read) READ_ALPHA else 1f)
             .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(article.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        FeedIcon(article, actions.favicon)
         Text(
-            "${article.feedTitle} · ${dateFormat.format(Instant.ofEpochSecond(article.published))}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            article.title,
+            Modifier.weight(1f).padding(horizontal = 12.dp),
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
+        AgePill(actions.age(article))
     }
     HorizontalDivider()
+}
+
+/** The Feed's favicon; while it loads, or if there is none, the Feed's first letter in a coloured circle. */
+@Composable
+private fun FeedIcon(article: Article, favicon: suspend (Article) -> ImageBitmap?) {
+    val icon by produceState<ImageBitmap?>(null, article.feedId) { value = favicon(article) }
+    val modifier = Modifier.size(FEED_ICON_SIZE)
+    val loaded = icon
+    if (loaded != null) {
+        Image(loaded, contentDescription = article.feedTitle, modifier, filterQuality = FilterQuality.Medium)
+    } else {
+        Box(
+            modifier.background(placeholderColour(article.feedTitle), CircleShape).semantics { contentDescription = article.feedTitle },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                article.feedTitle.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "?",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
+}
+
+/** A colour that stays the same for a Feed and tells most Feeds apart. */
+private fun placeholderColour(feedTitle: String): Color =
+    Color.hsv(hue = (feedTitle.hashCode().toUInt() % 360u).toFloat(), saturation = 0.55f, value = 0.65f)
+
+private val FEED_ICON_SIZE = 24.dp
+
+@Composable
+private fun AgePill(age: String) {
+    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer) {
+        Text(
+            age,
+            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            maxLines = 1,
+        )
+    }
 }
 
 /**

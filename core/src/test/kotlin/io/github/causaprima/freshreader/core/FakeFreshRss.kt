@@ -27,7 +27,18 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class FakeFreshRss : Dispatcher(), AutoCloseable {
     /** [listed] = false: the Feed is missing from `subscription/list`, e.g. subscribed between two requests. */
-    data class FakeFeed(val id: Long, val title: String, val category: String, val listed: Boolean = true)
+    /**
+     * [icon]: the favicon FreshRSS found for the Feed, or null if it found none and serves its default icon.
+     * [iconListed] = false: `subscription/list` gives no `iconUrl`.
+     */
+    class FakeFeed(
+        val id: Long,
+        val title: String,
+        val category: String,
+        val listed: Boolean = true,
+        val icon: ByteArray? = null,
+        val iconListed: Boolean = true,
+    )
 
     data class FakeArticle(
         val id: Long,
@@ -83,8 +94,13 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
 
     override fun close() = server.close()
 
-    fun addFeed(title: String, category: String, listed: Boolean = true): FakeFeed =
-        FakeFeed(feeds.size + 1L, title, category, listed).also { feeds += it }
+    fun addFeed(
+        title: String,
+        category: String,
+        listed: Boolean = true,
+        icon: ByteArray? = null,
+        iconListed: Boolean = true,
+    ): FakeFeed = FakeFeed(feeds.size + 1L, title, category, listed, icon, iconListed).also { feeds += it }
 
     /** Adds an Article; a Feed not added before is created in the Category "Uncategorized". */
     fun addArticle(
@@ -128,6 +144,7 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                 editTagStatus = request.url.queryParameter("code")?.toIntOrNull()
                 text(200, "edit-tag answers ${editTagStatus ?: "normally"}\n")
             }
+            path == "/f.php" -> favicon(request)
             path == "/api/greader.php/accounts/ClientLogin" -> clientLogin(request)
             !path.startsWith("/api/greader.php/reader/api/0/") -> text(404, "Not found")
             request.headers["Authorization"] != "GoogleLogin auth=$authToken" -> text(401, "Unauthorized!")
@@ -225,6 +242,18 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         return text(200, "OK")
     }
 
+    /** Like FreshRSS's `f.php`: the Feed's favicon, or FreshRSS's default icon if it found none. No login needed. */
+    private fun favicon(request: RecordedRequest): MockResponse {
+        val hash = request.url.queryParameter("h")
+        val feed = feeds.firstOrNull { "%08x".format(it.id) == hash }
+        val (bytes, fileName) = feed?.icon?.let { it to "$hash.ico" } ?: (DEFAULT_FAVICON to "default_favicon.ico")
+        return MockResponse.Builder()
+            .addHeader("Content-Type", "image/x-icon")
+            .addHeader("Content-Disposition", "attachment; filename=\"$fileName\"")
+            .body(okio.Buffer().write(bytes))
+            .build()
+    }
+
     private fun subscriptionList(request: RecordedRequest): MockResponse {
         if (request.url.queryParameter("output") != "json") return text(501, "Not Implemented!")
         val json = buildJsonObject {
@@ -238,7 +267,10 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                         }
                         put("url", "https://example.org/feed/${f.id}.xml")
                         put("htmlUrl", "https://example.org/")
-                        put("iconUrl", "https://freshrss.example.org/f.php?${f.id}")
+                        // Like FreshRSS from its base_url; here from the host the client asked for.
+                        val iconUrl = request.url.newBuilder().encodedPath("/f.php").query(null)
+                            .addQueryParameter("h", "%08x".format(f.id)).build()
+                        if (f.iconListed) put("iconUrl", iconUrl.toString())
                     }
                 }
             }
@@ -256,3 +288,6 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         .body(body)
         .build()
 }
+
+/** Stands in for FreshRSS's `default_favicon.ico`. */
+private val DEFAULT_FAVICON = "default favicon".toByteArray()

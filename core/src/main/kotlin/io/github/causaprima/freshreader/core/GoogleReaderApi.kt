@@ -41,8 +41,8 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
         }
     }
 
-    /** Each Feed's Category, keyed by Feed id (`feed/<n>`). */
-    suspend fun feedCategories(): ApiResult<Map<String, String>> {
+    /** Each Feed's Category and favicon, keyed by Feed id (`feed/<n>`); Feeds without a Category are left out. */
+    suspend fun feeds(): ApiResult<Map<String, FeedInfo>> {
         val url = apiBase.newBuilder()
             .addPathSegments("reader/api/0/subscription/list")
             .addQueryParameter("output", "json")
@@ -52,7 +52,7 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
             is ApiResult.Success -> try {
                 ApiResult.Success(
                     json.decodeFromString<SubscriptionList>(result.value).subscriptions
-                        .mapNotNull { s -> s.categories.firstOrNull()?.label?.let { s.id to it } }
+                        .mapNotNull { s -> s.categories.firstOrNull()?.label?.let { s.id to FeedInfo(it, s.iconUrl) } }
                         .toMap(),
                 )
             } catch (e: SerializationException) {
@@ -168,10 +168,13 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
     private class SubscriptionList(val subscriptions: List<Subscription> = emptyList())
 
     @Serializable
-    private class Subscription(val id: String, val categories: List<Label> = emptyList())
+    private class Subscription(val id: String, val categories: List<Label> = emptyList(), val iconUrl: String? = null)
 
     @Serializable
     private class Label(val label: String? = null)
+
+    /** A Feed as `subscription/list` describes it. [iconUrl]: FreshRSS's `f.php` link to its favicon. */
+    class FeedInfo(val category: String, val iconUrl: String?)
 
     companion object {
         /** Accepts the FreshRSS root URL or its `/api/greader.php` URL; null if it is not an http(s) URL. */
