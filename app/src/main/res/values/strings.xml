@@ -25,6 +25,8 @@
     <string name="view_mode">View Mode</string>
     <string name="view_mode_feed_content">Feed Content</string>
     <string name="view_mode_feed_content_hint">The Article as the Server delivers it.</string>
+    <string name="view_mode_reader_view">Reader View</string>
+    <string name="view_mode_reader_view_hint">The Article\'s web page, reduced to its main content. Asks for consent once where a site requires it.</string>
     <string name="view_mode_original_page">Original Page</string>
     <string name="view_mode_original_page_hint">The Article\'s web page, in the in-app browser.</string>
     <string name="open_in_browser">Open in browser</string>
