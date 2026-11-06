@@ -1,5 +1,7 @@
 package io.github.causaprima.freshreader.core
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.io.File
 
@@ -39,13 +41,24 @@ class Core(
     private val http = httpClient
     private val credentialStore = CredentialStore(storeDir, secretBox)
     private var api: GoogleReaderApi? = null
+    private val readingOrderStore = ReadingOrderStore(storeDir)
+    private var readingOrder: List<String> = readingOrderStore.load()
+    private var unread: List<Article> = emptyList()
+    private var categoryOfFeed: Map<String, String> = emptyMap()
 
-    /** The current list snapshot, sectioned by Category; replaced only by [refresh]. */
+    /** The current list snapshot, sectioned by Category; replaced by [refresh], rearranged by [setReadingOrder]. */
     var sections: List<Section> = emptyList()
         private set
 
     /** All Articles of the snapshot in display order, across sections. */
     val articles: List<Article> get() = sections.flatMap { it.articles }
+
+    /**
+     * All Categories known from the last refresh, in display order: the Reading Order first, then the
+     * rest alphabetically. Includes Categories without unread Articles, so that every one can be ordered.
+     */
+    val categories: List<String>
+        get() = inReadingOrder(categoryOfFeed.values + sections.map { it.category }, readingOrder)
 
     /** Whether credentials from an earlier successful login are stored on the device. */
     val hasStoredCredentials: Boolean get() = credentialStore.load() != null
@@ -77,7 +90,16 @@ class Core(
             is ApiResult.Success -> result.value
             is ApiResult.Failure -> return result.outcome
         }
-        sections = buildSections(unread, categories)
+        this.unread = unread
+        categoryOfFeed = categories
+        sections = buildSections(unread, categoryOfFeed, readingOrder)
         return Outcome.Ok
+    }
+
+    /** Replaces the Reading Order: the reader's chosen sequence of Categories, by name. */
+    suspend fun setReadingOrder(order: List<String>) {
+        withContext(Dispatchers.IO) { readingOrderStore.save(order) }
+        readingOrder = order
+        sections = buildSections(unread, categoryOfFeed, readingOrder)
     }
 }

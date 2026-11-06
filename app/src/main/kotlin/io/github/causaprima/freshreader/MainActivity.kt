@@ -2,9 +2,11 @@ package io.github.causaprima.freshreader
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,11 +18,14 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -32,11 +37,15 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -46,6 +55,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -64,7 +75,10 @@ class MainActivity : ComponentActivity() {
                     Screen.Loading -> Centered { CircularProgressIndicator() }
                     is Screen.Login -> LoginScreen(s, viewModel::logIn)
                     is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry)
-                    is Screen.Articles -> ArticleListScreen(s.sections)
+                    is Screen.Articles -> ArticleListScreen(s.sections, viewModel::openReadingOrder)
+                    is Screen.ReadingOrder -> ReadingOrderScreen(
+                        s.categories, viewModel::setReadingOrder, viewModel::closeReadingOrder,
+                    )
                 }
             }
         }
@@ -154,9 +168,20 @@ private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ArticleListScreen(sections: List<Section>) {
+private fun ArticleListScreen(sections: List<Section>, onOpenReadingOrder: () -> Unit) {
     val total = sections.sumOf { it.unreadCount }
-    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.list_title, total)) }) }) { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.list_title, total)) },
+                actions = {
+                    IconButton(onClick = onOpenReadingOrder) {
+                        Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.reading_order_title))
+                    }
+                },
+            )
+        },
+    ) { padding ->
         if (sections.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text(stringResource(R.string.list_empty))
@@ -199,4 +224,74 @@ private fun ArticleEntry(article: Article) {
         )
     }
     HorizontalDivider()
+}
+
+/**
+ * Settings screen for the Reading Order. The reader drags Categories by their handle; every drop is
+ * stored at once, so the list follows the new order immediately.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String>) -> Unit, onClose: () -> Unit) {
+    BackHandler(onBack = onClose)
+    val haptics = LocalHapticFeedback.current
+    // Follows the finger during a drag; handed to onReorder on drop.
+    var order by remember(categories) { mutableStateOf(categories) }
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        // Lazy list indices count the hint above the Categories, so locate the moved items by key.
+        order = order.toMutableList().apply {
+            val fromIndex = indexOf(from.key)
+            val toIndex = indexOf(to.key)
+            add(toIndex, removeAt(fromIndex))
+        }
+        haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.reading_order_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding), state = listState) {
+            item(key = "hint") {
+                Text(
+                    stringResource(R.string.reading_order_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+            items(order, key = { it }) { category ->
+                ReorderableItem(reorderState, key = category) { isDragging ->
+                    val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp)
+                    Surface(shadowElevation = elevation) {
+                        Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(category, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            IconButton(
+                                onClick = {},
+                                modifier = Modifier.draggableHandle(
+                                    onDragStarted = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                    },
+                                    onDragStopped = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                        onReorder(order)
+                                    },
+                                ),
+                            ) {
+                                Icon(painterResource(R.drawable.ic_drag_handle), stringResource(R.string.reading_order_drag, category))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

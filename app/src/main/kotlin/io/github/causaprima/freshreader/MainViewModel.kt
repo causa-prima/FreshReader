@@ -7,6 +7,7 @@ import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -18,6 +19,7 @@ sealed interface Screen {
     data class Login(val error: Outcome? = null, val busy: Boolean = false) : Screen
     data class Failed(val outcome: Outcome) : Screen
     data class Articles(val sections: List<Section>) : Screen
+    data class ReadingOrder(val categories: List<String>) : Screen
 }
 
 /** Translates Core Outcomes into Screens. Holds no business rules. */
@@ -29,6 +31,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _screen = MutableStateFlow<Screen>(Screen.Loading)
     val screen: StateFlow<Screen> = _screen
+
+    /** The last Reading Order change still being stored; changes are applied one after another. */
+    private var readingOrderChange: Job? = null
 
     init {
         viewModelScope.launch {
@@ -49,6 +54,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun retry() {
         _screen.value = Screen.Loading
         viewModelScope.launch { refresh() }
+    }
+
+    fun openReadingOrder() {
+        _screen.value = Screen.ReadingOrder(core.categories)
+    }
+
+    fun setReadingOrder(order: List<String>) {
+        _screen.value = Screen.ReadingOrder(order)
+        val previous = readingOrderChange
+        readingOrderChange = viewModelScope.launch {
+            previous?.join()
+            core.setReadingOrder(order)
+        }
+    }
+
+    fun closeReadingOrder() {
+        viewModelScope.launch {
+            readingOrderChange?.join()
+            _screen.value = Screen.Articles(core.sections)
+        }
     }
 
     private suspend fun refresh() {
