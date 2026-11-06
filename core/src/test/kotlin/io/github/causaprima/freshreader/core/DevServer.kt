@@ -3,7 +3,8 @@ package io.github.causaprima.freshreader.core
 /**
  * Runs the [FakeFreshRss] as a standalone Server for checking the app on the emulator:
  * `./gradlew :core:runFakeServer`, `adb reverse tcp:8085 tcp:8085`, then log in with `http://127.0.0.1:8085`, user `reader`, API password `api-secret`.
- * `curl 'http://127.0.0.1:8085/dev/edit-tag-status?code=503'` makes marking read fail (`code=` without a value restores it).
+ * `curl 'http://127.0.0.1:8085/dev/edit-tag-status?code=503'` makes marking read fail (`code=` without a value restores it);
+ * `curl 'http://127.0.0.1:8085/dev/add-article?feed=Golem.de&title=Fresh'` adds an unread Article.
  */
 fun main() {
     val server = FakeFreshRss()
