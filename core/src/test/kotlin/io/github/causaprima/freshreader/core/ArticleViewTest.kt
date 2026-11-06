@@ -85,7 +85,7 @@ class ArticleViewTest {
         val view = onlyArticleView()
 
         assertContains(view, """<img src="https://www.qwantz.com/comics/comic2-5237.png" title="hover">""")
-        assertContains(view, """srcset='https://example.org/a.webp 1x, https://example.org/b.webp 2x'""")
+        assertContains(view, """srcset="https://example.org/a.webp 1x, https://example.org/b.webp 2x"""")
         assertContains(view, """<a href="http://www.qwantz.com/">qwantz</a>""", message = "links are left alone")
     }
 }

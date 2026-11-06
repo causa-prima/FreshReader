@@ -2,7 +2,6 @@ package io.github.causaprima.freshreader
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.graphics.Color
 import android.os.Bundle
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -29,21 +28,28 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -61,12 +67,14 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
+import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
@@ -112,7 +121,14 @@ class MainActivity : ComponentActivity() {
                         ),
                     )
                     is Screen.ArticleView -> ArticleViewScreen(
-                        s, viewModel::articleDocument, viewModel::showArticle, viewModel::closeArticle,
+                        s, viewModel::articleDocument,
+                        ArticleViewActions(
+                            onShow = viewModel::showArticle,
+                            onClose = viewModel::closeArticle,
+                            onOpenFeedSettings = viewModel::openFeedSettings,
+                            onChangeFeedSettings = viewModel::setFeedSettings,
+                            onCloseFeedSettings = viewModel::closeFeedSettings,
+                        ),
                     )
                     is Screen.ReadingOrder -> ReadingOrderScreen(
                         s.categories, viewModel::setReadingOrder, viewModel::closeReadingOrder,
@@ -429,30 +445,35 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
     }
 }
 
+/** What the reader can do in the Article View. */
+private class ArticleViewActions(
+    val onShow: (Int) -> Unit,
+    val onClose: () -> Unit,
+    val onOpenFeedSettings: () -> Unit,
+    val onChangeFeedSettings: (FeedSettings) -> Unit,
+    val onCloseFeedSettings: () -> Unit,
+)
+
 /**
  * The Article View: a horizontal pager over the list snapshot. Arriving at an Article by swiping counts
  * as opening it. Each page shows the Core's prepared document in a WebView.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ArticleViewScreen(
-    view: Screen.ArticleView,
-    document: (Article) -> String,
-    onShow: (Int) -> Unit,
-    onClose: () -> Unit,
-) {
-    BackHandler(onBack = onClose)
+private fun ArticleViewScreen(view: Screen.ArticleView, document: (Article) -> String, actions: ArticleViewActions) {
+    BackHandler(onBack = actions.onClose)
     val pagerState = rememberPagerState(initialPage = view.position) { view.articles.size }
-    LaunchedEffect(pagerState) { snapshotFlow { pagerState.settledPage }.collect { onShow(it) } }
+    LaunchedEffect(pagerState) { snapshotFlow { pagerState.settledPage }.collect { actions.onShow(it) } }
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {},
                 navigationIcon = {
-                    IconButton(onClick = onClose) {
+                    IconButton(onClick = actions.onClose) {
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
                     }
                 },
+                actions = { ArticleViewMenu(actions.onOpenFeedSettings) },
             )
         },
     ) { padding ->
@@ -463,8 +484,56 @@ private fun ArticleViewScreen(
             key = { view.articles[it].id },
         ) { page ->
             val article = view.articles[page]
-            ArticleWebView(article, remember(article.id) { document(article) })
+            ArticleWebView(article, remember(article.id, view.revision) { document(article) })
         }
+    }
+    view.feedSettings?.let { FeedSettingsBottomSheet(it, actions.onChangeFeedSettings, actions.onCloseFeedSettings) }
+}
+
+@Composable
+private fun ArticleViewMenu(onOpenFeedSettings: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(painterResource(R.drawable.ic_more_vert), stringResource(R.string.more_options))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.feed_settings_open)) },
+                onClick = {
+                    expanded = false
+                    onOpenFeedSettings()
+                },
+            )
+        }
+    }
+}
+
+/** The Feed Settings of the shown Article's Feed; each change applies at once. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FeedSettingsBottomSheet(sheet: FeedSettingsSheet, onChange: (FeedSettings) -> Unit, onClose: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onClose) {
+        Text(
+            stringResource(R.string.feed_settings_title, sheet.feedTitle),
+            Modifier.padding(horizontal = 24.dp),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.bonus_text)) },
+            supportingContent = { Text(stringResource(R.string.bonus_text_hint)) },
+            trailingContent = {
+                Switch(checked = sheet.settings.bonusText, onCheckedChange = null) // the whole row toggles
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier
+                .padding(horizontal = 8.dp, vertical = 16.dp)
+                .toggleable(
+                    value = sheet.settings.bonusText,
+                    role = Role.Switch,
+                    onValueChange = { onChange(sheet.settings.copy(bonusText = it)) },
+                ),
+        )
     }
 }
 
@@ -475,7 +544,7 @@ private fun ArticleWebView(article: Article, document: String) {
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
             WebView(context).apply {
-                setBackgroundColor(Color.TRANSPARENT)
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 settings.apply {
                     javaScriptEnabled = false
                     setSupportZoom(false)
@@ -494,7 +563,13 @@ private fun ArticleWebView(article: Article, document: String) {
                         return true
                     }
                 }
-                loadDataWithBaseURL(article.url, document, "text/html", "utf-8", null)
+            }
+        },
+        // Feed Settings changes prepare the document again; it is reloaded only then.
+        update = { webView ->
+            if (webView.tag != document) {
+                webView.tag = document
+                webView.loadDataWithBaseURL(article.url, document, "text/html", "utf-8", null)
             }
         },
     )

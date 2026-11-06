@@ -1,5 +1,8 @@
 package io.github.causaprima.freshreader.core
 
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import java.net.URLDecoder
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
@@ -7,7 +10,7 @@ import java.time.format.DateTimeFormatter
  * The Article prepared for the Article View: one HTML document with a header (title, Feed, publication
  * date) followed by the Feed Content, laid out to the screen width and not zoomable.
  */
-internal fun articleViewDocument(article: Article, dateFormat: DateTimeFormatter): String {
+internal fun articleViewDocument(article: Article, settings: FeedSettings, dateFormat: DateTimeFormatter): String {
     val date = dateFormat.format(Instant.ofEpochSecond(article.published))
     return """
         |<!DOCTYPE html>
@@ -23,7 +26,7 @@ internal fun articleViewDocument(article: Article, dateFormat: DateTimeFormatter
         |<p class="meta">${escapeHtml(article.feedTitle)} · ${escapeHtml(date)}</p>
         |</header>
         |<article>
-        |${loadEmbedsOverHttps(article.content)}
+        |${prepareFeedContent(article.content, settings)}
         |</article>
         |</body>
         |</html>
@@ -38,24 +41,76 @@ private val ARTICLE_VIEW_STYLE = """
     .meta { margin: 0; opacity: 0.7; font-size: 0.9em; }
     img, video, iframe, svg, embed, object { max-width: 100%; height: auto; }
     pre { white-space: pre-wrap; }
+    table { width: 100%; table-layout: fixed; }
+    td, th { overflow-wrap: anywhere; }
+    .$BONUS_TEXT { display: block; margin: 0.5em 0; font-style: italic; }
 """.trimIndent()
 
-/** `src` and `srcset` attributes, with their value double-quoted, single-quoted or unquoted. */
-private val EMBED_ATTRIBUTE = Regex("""(\s(?:src|srcset)\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", RegexOption.IGNORE_CASE)
-private val PLAIN_HTTP = Regex("""\bhttp://""", RegexOption.IGNORE_CASE)
+private const val BONUS_TEXT = "bonus-text"
+private val PLAIN_HTTP = Regex("""^http://""", RegexOption.IGNORE_CASE)
+private val PLAIN_HTTP_IN_SRCSET = Regex("""(^|,)(\s*)http://""", RegexOption.IGNORE_CASE)
+
+/** Feed Content as the Article View shows it, following the Feed's [settings]. */
+private fun prepareFeedContent(html: String, settings: FeedSettings): String {
+    val document = Jsoup.parseBodyFragment(html)
+    document.outputSettings().prettyPrint(false)
+    val content = document.body()
+    loadEmbedsOverHttps(content)
+    tameFixedWidths(content)
+    if (settings.bonusText) showBonusText(content)
+    return content.html()
+}
 
 /**
  * Embedded images and media over plain http would be blocked by Android and the WebView, so they are
  * requested over https instead; Dinosaur Comics, for one, embeds its comic over http. Links stay as they are.
  */
-private fun loadEmbedsOverHttps(html: String): String = EMBED_ATTRIBUTE.replace(html) { match ->
-    val (prefix, doubleQuoted, singleQuoted, unquoted) = match.destructured
-    val upgrade = { value: String -> PLAIN_HTTP.replace(value, "https://") }
-    prefix + when {
-        match.groups[2] != null -> "\"${upgrade(doubleQuoted)}\""
-        match.groups[3] != null -> "'${upgrade(singleQuoted)}'"
-        else -> upgrade(unquoted)
+private fun loadEmbedsOverHttps(content: Element) {
+    for (element in content.select("[src]")) element.attr("src", PLAIN_HTTP.replace(element.attr("src"), "https://"))
+    for (element in content.select("[srcset]")) {
+        element.attr("srcset", PLAIN_HTTP_IN_SRCSET.replace(element.attr("srcset")) { "${it.groupValues[1]}${it.groupValues[2]}https://" })
     }
+}
+
+/**
+ * Layouts made for a desktop screen, such as Dinosaur Comics' 740 px wide tables, would overflow a phone.
+ * Their widths are dropped; the stylesheet then fits every table to the screen width.
+ */
+private fun tameFixedWidths(content: Element) {
+    for (element in content.select("table[width], col[width], colgroup[width], td[width], th[width]")) element.removeAttr("width")
+}
+
+/**
+ * Below each image with a `title`: the title, and the `alt` text too if it says something else. After the
+ * Feed Content: the subject of each `mailto:` link, read after the comic as on the web, not in a link bar.
+ */
+private fun showBonusText(content: Element) {
+    for (image in content.select("img[title]")) {
+        val title = image.attr("title").trim()
+        val alt = image.attr("alt").trim()
+        val texts = listOf(title, alt).filter { it.isNotEmpty() }.distinct()
+        // An image inside a link: the text goes after the link, so that tapping it does not open the link.
+        var previous = image.closest("a") ?: image
+        for (text in texts) {
+            val bonusText = Element("span").addClass(BONUS_TEXT).text(text)
+            previous.after(bonusText)
+            previous = bonusText
+        }
+    }
+    for (link in content.select("a[href^=mailto:]")) {
+        val subject = mailSubject(link.attr("href")) ?: continue
+        content.appendChild(Element("span").addClass(BONUS_TEXT).text("✉ $subject"))
+    }
+}
+
+/** The decoded `subject` of a `mailto:` link (RFC 6068), or null if it has none. */
+private fun mailSubject(href: String): String? {
+    val query = href.substringAfter('?', missingDelimiterValue = "")
+    val encoded = query.split('&').firstOrNull { it.substringBefore('=').equals("subject", ignoreCase = true) }
+        ?.substringAfter('=', missingDelimiterValue = "") ?: return null
+    // In mailto, "+" is a plus sign, not an encoded space.
+    val subject = runCatching { URLDecoder.decode(encoded.replace("+", "%2B"), Charsets.UTF_8) }.getOrDefault(encoded)
+    return subject.trim().ifEmpty { null }
 }
 
 private fun escapeHtml(text: String): String = buildString(text.length) {

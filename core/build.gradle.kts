@@ -18,6 +18,7 @@ dependencies {
     api(libs.okhttp)
     api(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.jsoup)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

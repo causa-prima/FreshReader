@@ -83,6 +83,8 @@ class Core(
     private val sessionLock = Mutex()
     private val readingOrderStore = ReadingOrderStore(storeDir)
     private var readingOrder: List<String> = readingOrderStore.load()
+    private val feedSettingsStore = FeedSettingsStore(storeDir)
+    private var feedSettings: Map<String, FeedSettings> = feedSettingsStore.load()
     private var unread: List<Article> = emptyList()
     private var categoryOfFeed: Map<String, String> = emptyMap()
     /** Ids of the snapshot's Articles that the reader has read since the last refresh. */
@@ -240,13 +242,24 @@ class Core(
     }
 
     /** Prepares [article] for the Article View: an HTML document with header and Feed Content. */
-    fun prepareArticleView(article: Article): String = articleViewDocument(article, dateFormat)
+    fun prepareArticleView(article: Article): String =
+        articleViewDocument(article, feedSettings(article.feedId), dateFormat)
 
     /** Replaces the Reading Order: the reader's chosen sequence of Categories, by name. */
     suspend fun setReadingOrder(order: List<String>) {
         withContext(Dispatchers.IO) { readingOrderStore.save(order) }
         readingOrder = order
         rebuildSections()
+    }
+
+    /** The Feed Settings of the Feed [feedId]; defaults for a Feed the reader has not changed. */
+    fun feedSettings(feedId: String): FeedSettings = feedSettings[feedId] ?: FeedSettings()
+
+    /** Replaces the Feed Settings of the Feed [feedId]; the next prepared Article View follows them. */
+    suspend fun setFeedSettings(feedId: String, settings: FeedSettings) {
+        val changed = feedSettings + (feedId to settings)
+        withContext(Dispatchers.IO) { feedSettingsStore.save(changed) }
+        feedSettings = changed
     }
 
     /** Stops sending read marks; pending ones stay stored for the next Core. */
