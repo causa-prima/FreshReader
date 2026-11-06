@@ -20,10 +20,13 @@ sealed interface Screen {
     data object Loading : Screen
     data class Login(val error: Outcome? = null, val busy: Boolean = false) : Screen
     data class Failed(val outcome: Outcome) : Screen
-    data class Articles(val sections: List<Section>) : Screen
+    /** [focus]: id of the Article the list should bring into view, e.g. the last one shown in the Article View. */
+    data class Articles(val sections: List<Section>, val focus: String? = null) : Screen
     data class ReadingOrder(val categories: List<String>) : Screen
-    /** [document]: the Article prepared by the Core, an HTML document with header and Feed Content. */
-    data class ArticleView(val article: Article, val document: String) : Screen
+    /** The Article View, swipeable over the list snapshot's [articles]; [position] is the Article shown. */
+    data class ArticleView(val articles: List<Article>, val position: Int) : Screen {
+        val article: Article get() = articles[position]
+    }
 }
 
 /** Translates Core Outcomes into Screens. Holds no business rules. */
@@ -39,7 +42,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Whether the read marks have reached the Server; a permanent failure shows as a hint. */
     val syncStatus: StateFlow<SyncStatus> = core.syncStatus
 
-    /** The read rule of the last opened Article, applied while the Article View is shown. */
+    /** The read rule of the last opened Article, applied while the Article View is shown; applied in order. */
     private var opening: Job? = null
 
     /** The last Reading Order change still being stored; changes are applied one after another. */
@@ -67,15 +70,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openArticle(article: Article) {
-        val position = core.articles.indexOfFirst { it.id == article.id }
-        _screen.value = Screen.ArticleView(article, core.prepareArticleView(article))
-        opening = viewModelScope.launch { core.openArticle(position) }
+        val articles = core.articles
+        val position = articles.indexOfFirst { it.id == article.id }
+        if (position < 0) return
+        _screen.value = Screen.ArticleView(articles, position)
+        applyReadRule(position)
     }
 
+    /** The reader swiped to the Article at [position]; arriving there counts as opening it. */
+    fun showArticle(position: Int) {
+        val view = _screen.value as? Screen.ArticleView ?: return
+        _screen.value = view.copy(position = position)
+        applyReadRule(position)
+    }
+
+    /** The Article prepared by the Core: an HTML document with header and Feed Content. */
+    fun articleDocument(article: Article): String = core.prepareArticleView(article)
+
     fun closeArticle() {
+        val focus = (_screen.value as? Screen.ArticleView)?.article?.id
         viewModelScope.launch {
             opening?.join()
-            _screen.value = Screen.Articles(core.sections)
+            _screen.value = Screen.Articles(core.sections, focus)
+        }
+    }
+
+    private fun applyReadRule(position: Int) {
+        val previous = opening
+        opening = viewModelScope.launch {
+            previous?.join()
+            core.openArticle(position)
         }
     }
 

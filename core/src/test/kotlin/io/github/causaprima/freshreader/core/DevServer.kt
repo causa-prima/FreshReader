@@ -31,8 +31,18 @@ fun main() {
 /** Feed Content resembling what these Feeds deliver, to check the Article View's layout. */
 private fun devContent(feed: String): String = when (feed) {
     "xkcd" -> """<img src="https://imgs.xkcd.com/comics/elevators.png" title="Bonus Text hidden in the hover title." alt="Elevators">"""
-    // Dinosaur Comics embeds its comic over plain http.
-    "Dinosaur Comics" -> """<p><img src="http://www.qwantz.com/comics/comic2-5237.png" title="Hidden hover text"></p>"""
+    // Dinosaur Comics' structure: 740 px wide tables around the comic, embedded over plain http.
+    "Dinosaur Comics" -> """
+        <center><table width=740 border=0 cellspacing=5 cellpadding=5><tr><td colspan=4 align="center">
+        <a href="http://www.qwantz.com/archive.php">archive</a> -
+        <a href="mailto:comic@example.org?subject=hidden%20mail%20subject">contact</a> -
+        <a href="http://www.qwantz.com/about.php">about</a></td></tr></table>
+        <img src="http://www.qwantz.com/comics/comic2-5237.png" class="comic" title="Hidden hover text">
+        <table width=740 border=0 cellspacing=5 cellpadding=5><tr>
+        <td width=100 align="left" valign="top"><a rel="prev" href="http://www.qwantz.com/">&larr; previous</a></td>
+        <td width=* align="center" valign="top">November 4th, 2026</td><td width=100 align="right" valign="top">next</td>
+        </tr><tr><td colspan=3 align="left" valign="top"><p>A short note below the comic.</p></td></tr></table></center>
+    """.trimIndent()
     else -> """
         <p>An opening paragraph long enough to wrap across several lines on a phone screen, so that line length,
         font size and margins of the Article View can be judged. <a href="https://freshrss.org/">A link to FreshRSS</a>.</p>

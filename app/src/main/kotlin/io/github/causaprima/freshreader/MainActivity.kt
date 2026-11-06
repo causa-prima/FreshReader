@@ -27,6 +27,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -45,12 +47,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -70,6 +73,7 @@ import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
+import kotlinx.coroutines.flow.first
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.Instant
@@ -94,9 +98,11 @@ class MainActivity : ComponentActivity() {
                     is Screen.Login -> LoginScreen(s, viewModel::logIn)
                     is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry)
                     is Screen.Articles -> ArticleListScreen(
-                        s.sections, syncStatus, listState, viewModel::openArticle, viewModel::openReadingOrder,
+                        s.sections, s.focus, syncStatus, listState, viewModel::openArticle, viewModel::openReadingOrder,
                     )
-                    is Screen.ArticleView -> ArticleViewScreen(s.article, s.document, viewModel::closeArticle)
+                    is Screen.ArticleView -> ArticleViewScreen(
+                        s, viewModel::articleDocument, viewModel::showArticle, viewModel::closeArticle,
+                    )
                     is Screen.ReadingOrder -> ReadingOrderScreen(
                         s.categories, viewModel::setReadingOrder, viewModel::closeReadingOrder,
                     )
@@ -194,12 +200,14 @@ private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT
 @Composable
 private fun ArticleListScreen(
     sections: List<Section>,
+    focus: String?,
     syncStatus: SyncStatus,
     listState: LazyListState,
     onOpenArticle: (Article) -> Unit,
     onOpenReadingOrder: () -> Unit,
 ) {
     val total = sections.sumOf { it.unreadCount }
+    LaunchedEffect(focus) { if (focus != null) bringIntoView(listState, sections, focus) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -226,6 +234,31 @@ private fun ArticleListScreen(
             }
         }
     }
+}
+
+/**
+ * Scrolls the list so that the Article with id [articleId] is fully visible below the sticky Category
+ * header, unless it already is. Leaves the list alone when the reader comes back to where they were.
+ */
+private suspend fun bringIntoView(listState: LazyListState, sections: List<Section>, articleId: String) {
+    // Lazy list indices count one header per section.
+    var index = -1
+    var offset = 0
+    for (section in sections) {
+        val position = section.articles.indexOfFirst { it.id == articleId }
+        if (position >= 0) {
+            index = offset + 1 + position
+            break
+        }
+        offset += 1 + section.articles.size
+    }
+    if (index < 0) return
+    val layout = snapshotFlow { listState.layoutInfo }.first { it.visibleItemsInfo.isNotEmpty() }
+    val header = layout.visibleItemsInfo.first().takeIf { (it.key as? String)?.startsWith("category:") == true }?.size ?: 0
+    val item = layout.visibleItemsInfo.firstOrNull { it.index == index }
+    if (item != null && item.offset >= header && item.offset + item.size <= layout.viewportEndOffset) return
+    // The item before it ends up under the sticky header, or is that header itself.
+    listState.scrollToItem(maxOf(index - 1, 0))
 }
 
 /** The subtle hint that read marks permanently failed to reach the Server; tapping it explains why. */
@@ -355,13 +388,20 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
 }
 
 /**
- * The Article View: the Core's prepared document in a WebView. JavaScript stays off, zoom is disabled,
- * and links open in the browser instead of replacing the Article.
+ * The Article View: a horizontal pager over the list snapshot. Arriving at an Article by swiping counts
+ * as opening it. Each page shows the Core's prepared document in a WebView.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ArticleViewScreen(article: Article, document: String, onClose: () -> Unit) {
+private fun ArticleViewScreen(
+    view: Screen.ArticleView,
+    document: (Article) -> String,
+    onShow: (Int) -> Unit,
+    onClose: () -> Unit,
+) {
     BackHandler(onBack = onClose)
+    val pagerState = rememberPagerState(initialPage = view.position) { view.articles.size }
+    LaunchedEffect(pagerState) { snapshotFlow { pagerState.settledPage }.collect { onShow(it) } }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -374,35 +414,46 @@ private fun ArticleViewScreen(article: Article, document: String, onClose: () ->
             )
         },
     ) { padding ->
-        key(article.id) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                factory = { context ->
-                    WebView(context).apply {
-                        setBackgroundColor(Color.TRANSPARENT)
-                        settings.apply {
-                            javaScriptEnabled = false
-                            setSupportZoom(false)
-                            builtInZoomControls = false
-                            displayZoomControls = false
-                            allowFileAccess = false
-                            allowContentAccess = false
-                        }
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                                try {
-                                    view.context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
-                                } catch (_: ActivityNotFoundException) {
-                                    // No app can open this link; stay on the Article.
-                                }
-                                return true
-                            }
-                        }
-                        loadDataWithBaseURL(article.url, document, "text/html", "utf-8", null)
-                    }
-                },
-            )
+        HorizontalPager(
+            pagerState,
+            Modifier.fillMaxSize().padding(padding),
+            beyondViewportPageCount = 1, // the neighbours are ready when the swipe starts
+            key = { view.articles[it].id },
+        ) { page ->
+            val article = view.articles[page]
+            ArticleWebView(article, remember(article.id) { document(article) })
         }
     }
 }
 
+/** One Article's document in a WebView. JavaScript stays off, zoom is disabled, and links open in the browser. */
+@Composable
+private fun ArticleWebView(article: Article, document: String) {
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            WebView(context).apply {
+                setBackgroundColor(Color.TRANSPARENT)
+                settings.apply {
+                    javaScriptEnabled = false
+                    setSupportZoom(false)
+                    builtInZoomControls = false
+                    displayZoomControls = false
+                    allowFileAccess = false
+                    allowContentAccess = false
+                }
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                        try {
+                            view.context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                        } catch (_: ActivityNotFoundException) {
+                            // No app can open this link; stay on the Article.
+                        }
+                        return true
+                    }
+                }
+                loadDataWithBaseURL(article.url, document, "text/html", "utf-8", null)
+            }
+        },
+    )
+}
