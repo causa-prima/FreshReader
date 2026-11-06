@@ -14,4 +14,8 @@
     <string name="retry">Retry</string>
     <string name="list_title">%1$d unread</string>
     <string name="list_empty">No unread Articles.</string>
+    <string name="back">Back</string>
+    <string name="reading_order_title">Reading Order</string>
+    <string name="reading_order_hint">Drag the Categories into the order you read them in. Categories added later appear at the end, alphabetically.</string>
+    <string name="reading_order_drag">Move %1$s</string>
 </resources>

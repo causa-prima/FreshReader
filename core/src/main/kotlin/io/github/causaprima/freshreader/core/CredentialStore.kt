@@ -18,10 +18,6 @@ internal class CredentialStore(dir: File, private val secretBox: SecretBox) {
         }.getOrNull()
     }
 
-    fun save(credentials: Credentials) {
-        file.parentFile.mkdirs()
-        val tmp = File(file.parentFile, "${file.name}.tmp")
-        tmp.writeBytes(secretBox.seal(Json.encodeToString(credentials).encodeToByteArray()))
-        if (!tmp.renameTo(file)) error("Could not write $file")
-    }
+    fun save(credentials: Credentials) =
+        writeAtomically(file, secretBox.seal(Json.encodeToString(credentials).encodeToByteArray()))
 }
