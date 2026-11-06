@@ -19,6 +19,11 @@
     <string name="reading_order_title">Reading Order</string>
     <string name="reading_order_hint">Drag the Categories into the order you read them in. Categories added later appear at the end, alphabetically.</string>
     <string name="reading_order_drag">Move %1$s</string>
+    <string name="more_options">More options</string>
+    <string name="feed_settings_open">Settings for this Feed</string>
+    <string name="feed_settings_title">Settings for %1$s</string>
+    <string name="bonus_text">Bonus Text</string>
+    <string name="bonus_text_hint">Shows text this Feed hides from view: the title of each image below it, and the subject of mail links at the end.</string>
     <string name="sync_failed_title">Read marks not sent</string>
     <plurals name="sync_failed_message">
         <item quantity="one">%1$d read mark could not be sent to the Server: %2$s It is sent again when the list is refreshed or another Article is opened.</item>

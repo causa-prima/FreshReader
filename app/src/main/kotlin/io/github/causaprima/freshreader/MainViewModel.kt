@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
+import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
@@ -31,11 +32,23 @@ sealed interface Screen {
         val refreshError: Outcome? = null,
     ) : Screen
     data class ReadingOrder(val categories: List<String>) : Screen
-    /** The Article View, swipeable over the list snapshot's [articles]; [position] is the Article shown. */
-    data class ArticleView(val articles: List<Article>, val position: Int) : Screen {
+    /**
+     * The Article View, swipeable over the list snapshot's [articles]; [position] is the Article shown.
+     * [feedSettings]: the Feed Settings sheet, while it is open. [revision] grows whenever Feed Settings
+     * change, so that the shown documents are prepared again.
+     */
+    data class ArticleView(
+        val articles: List<Article>,
+        val position: Int,
+        val feedSettings: FeedSettingsSheet? = null,
+        val revision: Int = 0,
+    ) : Screen {
         val article: Article get() = articles[position]
     }
 }
+
+/** The Feed Settings sheet for one Feed, showing its current [settings]. */
+data class FeedSettingsSheet(val feedId: String, val feedTitle: String, val settings: FeedSettings)
 
 /** Translates Core Outcomes into Screens. Holds no business rules. */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -55,6 +68,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The last Reading Order change still being stored; changes are applied one after another. */
     private var readingOrderChange: Job? = null
+
+    /** The last Feed Settings change still being stored; changes are applied one after another. */
+    private var feedSettingsChange: Job? = null
 
     init {
         viewModelScope.launch {
@@ -125,6 +141,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The Article prepared by the Core: an HTML document with header and Feed Content. */
     fun articleDocument(article: Article): String = core.prepareArticleView(article)
+
+    fun openFeedSettings() {
+        val view = _screen.value as? Screen.ArticleView ?: return
+        val feedId = view.article.feedId
+        _screen.value = view.copy(feedSettings = FeedSettingsSheet(feedId, view.article.feedTitle, core.feedSettings(feedId)))
+    }
+
+    /** Changes the open sheet's Feed Settings; the Article View shows the change as soon as it is stored. */
+    fun setFeedSettings(settings: FeedSettings) {
+        val view = _screen.value as? Screen.ArticleView ?: return
+        val sheet = view.feedSettings ?: return
+        _screen.value = view.copy(feedSettings = sheet.copy(settings = settings))
+        val previous = feedSettingsChange
+        feedSettingsChange = viewModelScope.launch {
+            previous?.join()
+            core.setFeedSettings(sheet.feedId, settings)
+            val current = _screen.value as? Screen.ArticleView ?: return@launch
+            _screen.value = current.copy(revision = current.revision + 1)
+        }
+    }
+
+    fun closeFeedSettings() {
+        val view = _screen.value as? Screen.ArticleView ?: return
+        _screen.value = view.copy(feedSettings = null)
+    }
 
     fun closeArticle() {
         val focus = (_screen.value as? Screen.ArticleView)?.article?.id
