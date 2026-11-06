@@ -9,7 +9,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -24,6 +24,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Outcome
+import io.github.causaprima.freshreader.core.Section
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -62,7 +64,7 @@ class MainActivity : ComponentActivity() {
                     Screen.Loading -> Centered { CircularProgressIndicator() }
                     is Screen.Login -> LoginScreen(s, viewModel::logIn)
                     is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry)
-                    is Screen.Articles -> ArticleListScreen(s.articles)
+                    is Screen.Articles -> ArticleListScreen(s.sections)
                 }
             }
         }
@@ -152,26 +154,49 @@ private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ArticleListScreen(articles: List<Article>) {
-    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.list_title, articles.size)) }) }) { padding ->
-        if (articles.isEmpty()) {
+private fun ArticleListScreen(sections: List<Section>) {
+    val total = sections.sumOf { it.unreadCount }
+    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.list_title, total)) }) }) { padding ->
+        if (sections.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text(stringResource(R.string.list_empty))
             }
             return@Scaffold
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
-            items(articles, key = { it.id }) { article ->
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-                    Text(article.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        "${article.feedTitle} · ${dateFormat.format(Instant.ofEpochSecond(article.published))}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                HorizontalDivider()
+        LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+            sections.forEach { section ->
+                stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
+                items(section.articles, key = { it.id }) { article -> ArticleEntry(article) }
             }
         }
     }
+}
+
+@Composable
+private fun SectionHeader(section: Section) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                section.category, style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f),
+            )
+            Text(
+                section.unreadCount.toString(), style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArticleEntry(article: Article) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Text(article.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        Text(
+            "${article.feedTitle} · ${dateFormat.format(Instant.ofEpochSecond(article.published))}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    HorizontalDivider()
 }

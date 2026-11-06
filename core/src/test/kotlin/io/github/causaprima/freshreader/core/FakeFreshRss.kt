@@ -19,9 +19,12 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * Mirrors the behaviour of FreshRSS's `p/api/greader.php` (edge): ClientLogin answers 401 on a wrong
  * API password, API calls without a valid `GoogleLogin auth=` header answer 401, and `stream/contents`
- * only sends a `continuation` when the page was full.
+ * only sends a `continuation` when the page was full, and `subscription/list` requires `output=json`.
  */
 class FakeFreshRss : Dispatcher(), AutoCloseable {
+    /** [listed] = false: the Feed is missing from `subscription/list`, e.g. subscribed between two requests. */
+    data class FakeFeed(val id: Long, val title: String, val category: String, val listed: Boolean = true)
+
     data class FakeArticle(
         val id: Long,
         val title: String,
@@ -43,6 +46,7 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
     /** When true, the unread stream answers 200 with a body that is not Google Reader JSON. */
     var garbledStream = false
 
+    val feeds = mutableListOf<FakeFeed>()
     val articles = mutableListOf<FakeArticle>()
     val requests = CopyOnWriteArrayList<RecordedRequest>()
 
@@ -59,9 +63,16 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
 
     override fun close() = server.close()
 
+    fun addFeed(title: String, category: String, listed: Boolean = true): FakeFeed =
+        FakeFeed(feeds.size + 1L, title, category, listed).also { feeds += it }
+
+    /** Adds an Article; a Feed not added before is created in the Category "Uncategorized". */
     fun addArticle(title: String, feedTitle: String = "Feed", published: Long, read: Boolean = false) {
+        if (feeds.none { it.title == feedTitle }) addFeed(feedTitle, "Uncategorized")
         articles += FakeArticle(articles.size + 1L, title, feedTitle, published, read)
     }
+
+    private fun feedOf(article: FakeArticle) = feeds.first { it.title == article.feedTitle }
 
     /**
      * Drops the connection. MockWebServer applies request-start effects from [peek] on new connections;
@@ -84,6 +95,7 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
             request.headers["Authorization"] != "GoogleLogin auth=$authToken" -> text(401, "Unauthorized!")
             path == "/api/greader.php/reader/api/0/stream/contents/user/-/state/com.google/reading-list" ->
                 streamContents(request)
+            path == "/api/greader.php/reader/api/0/subscription/list" -> subscriptionList(request)
             else -> text(400, "Bad Request!")
         }
     }
@@ -127,9 +139,12 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                         putJsonArray("alternate") {
                             addJsonObject { put("href", "https://example.org/${a.id}"); put("type", "text/html") }
                         }
-                        putJsonArray("categories") { add("user/-/state/com.google/reading-list") }
+                        putJsonArray("categories") {
+                            add("user/-/state/com.google/reading-list")
+                            add("user/-/label/${feedOf(a).category}")
+                        }
                         putJsonObject("origin") {
-                            put("streamId", "feed/1")
+                            put("streamId", "feed/${feedOf(a).id}")
                             put("htmlUrl", "https://example.org/")
                             put("title", a.feedTitle)
                         }
@@ -138,6 +153,31 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                 }
             }
             if (page.size >= count && page.isNotEmpty()) put("continuation", page.last().id.toString())
+        }
+        return MockResponse.Builder()
+            .code(200)
+            .setHeader("Content-Type", "application/json; charset=UTF-8")
+            .body(json.toString())
+            .build()
+    }
+
+    private fun subscriptionList(request: RecordedRequest): MockResponse {
+        if (request.url.queryParameter("output") != "json") return text(501, "Not Implemented!")
+        val json = buildJsonObject {
+            putJsonArray("subscriptions") {
+                feeds.filter { it.listed }.forEach { f ->
+                    addJsonObject {
+                        put("id", "feed/${f.id}")
+                        put("title", f.title)
+                        putJsonArray("categories") {
+                            addJsonObject { put("id", "user/-/label/${f.category}"); put("label", f.category) }
+                        }
+                        put("url", "https://example.org/feed/${f.id}.xml")
+                        put("htmlUrl", "https://example.org/")
+                        put("iconUrl", "https://freshrss.example.org/f.php?${f.id}")
+                    }
+                }
+            }
         }
         return MockResponse.Builder()
             .code(200)
