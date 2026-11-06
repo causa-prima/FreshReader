@@ -3,9 +3,9 @@ package io.github.causaprima.freshreader
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.Outcome
+import io.github.causaprima.freshreader.core.Section
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +17,7 @@ sealed interface Screen {
     data object Loading : Screen
     data class Login(val error: Outcome? = null, val busy: Boolean = false) : Screen
     data class Failed(val outcome: Outcome) : Screen
-    data class Articles(val articles: List<Article>) : Screen
+    data class Articles(val sections: List<Section>) : Screen
 }
 
 /** Translates Core Outcomes into Screens. Holds no business rules. */
@@ -53,7 +53,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refresh() {
         _screen.value = when (val outcome = withContext(Dispatchers.IO) { core.refresh() }) {
-            Outcome.Ok -> Screen.Articles(core.articles)
+            Outcome.Ok -> Screen.Articles(core.sections)
             Outcome.WrongCredentials, Outcome.InvalidServerUrl -> Screen.Login(error = outcome)
             is Outcome.Unreachable, is Outcome.ServerError -> Screen.Failed(outcome)
         }

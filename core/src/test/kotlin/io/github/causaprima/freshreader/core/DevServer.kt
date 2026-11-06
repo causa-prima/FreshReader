@@ -7,7 +7,11 @@ package io.github.causaprima.freshreader.core
 fun main() {
     val server = FakeFreshRss()
     server.maxPageSize = 10
-    val feeds = listOf("Golem.de", "xkcd", "Der Postillon", "ComputerBase", "Dinosaur Comics")
+    listOf(
+        "Golem.de" to "News", "ComputerBase" to "News", "xkcd" to "Pictures", "Dinosaur Comics" to "Pictures",
+        "Der Postillon" to "Leisure", "FreshRSS releases" to "Updates", "Stellenmarkt" to "Job",
+    ).forEach { (feed, category) -> server.addFeed(feed, category) }
+    val feeds = server.feeds.map { it.title }
     val start = System.currentTimeMillis() / 1000 - 3 * 24 * 3600
     repeat(25) { i ->
         server.addArticle(

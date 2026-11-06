@@ -15,11 +15,18 @@ sealed interface Outcome {
 data class Article(
     val id: String,
     val title: String,
+    /** The Server's Feed id, e.g. `feed/12`. */
+    val feedId: String,
     val feedTitle: String,
     /** Publication time in epoch seconds. */
     val published: Long,
     val url: String?,
 )
+
+/** One Category's part of the list snapshot. */
+data class Section(val category: String, val articles: List<Article>) {
+    val unreadCount: Int get() = articles.size
+}
 
 /**
  * FreshReader's UI-independent core: the single seam the UI talks to.
@@ -33,9 +40,12 @@ class Core(
     private val credentialStore = CredentialStore(storeDir, secretBox)
     private var api: GoogleReaderApi? = null
 
-    /** The current list snapshot; replaced only by [refresh]. */
-    var articles: List<Article> = emptyList()
+    /** The current list snapshot, sectioned by Category; replaced only by [refresh]. */
+    var sections: List<Section> = emptyList()
         private set
+
+    /** All Articles of the snapshot in display order, across sections. */
+    val articles: List<Article> get() = sections.flatMap { it.articles }
 
     /** Whether credentials from an earlier successful login are stored on the device. */
     val hasStoredCredentials: Boolean get() = credentialStore.load() != null
@@ -59,12 +69,15 @@ class Core(
             if (outcome != Outcome.Ok) return outcome
             api!!
         }
-        return when (val result = api.unreadArticles()) {
-            is ApiResult.Success -> {
-                articles = result.value.sortedBy { it.published }
-                Outcome.Ok
-            }
-            is ApiResult.Failure -> result.outcome
+        val categories = when (val result = api.feedCategories()) {
+            is ApiResult.Success -> result.value
+            is ApiResult.Failure -> return result.outcome
         }
+        val unread = when (val result = api.unreadArticles()) {
+            is ApiResult.Success -> result.value
+            is ApiResult.Failure -> return result.outcome
+        }
+        sections = buildSections(unread, categories)
+        return Outcome.Ok
     }
 }

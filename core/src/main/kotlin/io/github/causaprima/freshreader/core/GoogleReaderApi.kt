@@ -38,6 +38,26 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
         }
     }
 
+    /** Each Feed's Category, keyed by Feed id (`feed/<n>`). */
+    suspend fun feedCategories(): ApiResult<Map<String, String>> {
+        val url = apiBase.newBuilder()
+            .addPathSegments("reader/api/0/subscription/list")
+            .addQueryParameter("output", "json")
+            .build()
+        return when (val result = execute(authorized(url))) {
+            is ApiResult.Failure -> result
+            is ApiResult.Success -> try {
+                ApiResult.Success(
+                    json.decodeFromString<SubscriptionList>(result.value).subscriptions
+                        .mapNotNull { s -> s.categories.firstOrNull()?.label?.let { s.id to it } }
+                        .toMap(),
+                )
+            } catch (e: SerializationException) {
+                ApiResult.Failure(Outcome.ServerError(200))
+            }
+        }
+    }
+
     /** All unread Articles, oldest crawled first, following `continuation` until the last page. */
     suspend fun unreadArticles(): ApiResult<List<Article>> {
         val articles = mutableListOf<Article>()
@@ -101,6 +121,7 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
         fun toArticle() = Article(
             id = id,
             title = title,
+            feedId = origin?.streamId.orEmpty(),
             feedTitle = origin?.title.orEmpty(),
             published = published,
             url = alternate.firstOrNull()?.href,
@@ -111,7 +132,16 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
     private class Link(val href: String)
 
     @Serializable
-    private class Origin(val title: String? = null)
+    private class Origin(val streamId: String? = null, val title: String? = null)
+
+    @Serializable
+    private class SubscriptionList(val subscriptions: List<Subscription> = emptyList())
+
+    @Serializable
+    private class Subscription(val id: String, val categories: List<Label> = emptyList())
+
+    @Serializable
+    private class Label(val label: String? = null)
 
     companion object {
         /** Accepts the FreshRSS root URL or its `/api/greader.php` URL; null if it is not an http(s) URL. */
