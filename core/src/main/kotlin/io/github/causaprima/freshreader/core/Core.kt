@@ -77,6 +77,7 @@ class Core(
         .withLocale(locale)
         .withZone(zone)
     private val http = httpClient
+    private val followIt = FollowIt(httpClient)
     private val credentialStore = CredentialStore(storeDir, secretBox)
     @Volatile
     private var api: GoogleReaderApi? = null
@@ -250,6 +251,14 @@ class Core(
         withContext(Dispatchers.IO) { readingOrderStore.save(order) }
         readingOrder = order
         rebuildSections()
+    }
+
+    /**
+     * The link to [article]'s Original Page, for showing, opening and sharing it; null if the Feed gives none.
+     */
+    suspend fun originalPageUrl(article: Article): String? {
+        val link = article.url ?: return null
+        return withContext(Dispatchers.IO) { followIt.unwrap(link) }
     }
 
     /** The Feed Settings of the Feed [feedId]; defaults for a Feed the reader has not changed. */

@@ -22,6 +22,7 @@ fun main() {
             published = start + i * 3 * 3600L,
             read = i % 6 == 5, // spread over the Feeds; with 7 Feeds, i % 7 would mark one Feed entirely read
             content = devContent(feeds[i % feeds.size]),
+            url = devLink(feeds[i % feeds.size]),
         )
     }
     server.start(8085)
@@ -34,12 +35,21 @@ private fun devContent(feed: String): String = when (feed) {
     // Captured from the real Feeds, as the Core tests use them.
     "xkcd" -> fixture("xkcd-3319.html")
     "Dinosaur Comics" -> fixture("qwantz-4538.html")
+    "Der Postillon" -> fixture("postillon-1-klasse.html")
     else -> """
         <p>An opening paragraph long enough to wrap across several lines on a phone screen, so that line length,
         font size and margins of the Article View can be judged. <a href="https://freshrss.org/">A link to FreshRSS</a>.</p>
         <p><img src="data:image/svg+xml;base64,$WIDE_IMAGE" alt="A 1600 px wide image"></p>
         <p>A closing paragraph after the image.</p>
     """.trimIndent()
+}
+
+/** Real links, so that the Original Page can be checked on the device: Der Postillon's follow.it tracking link (captured 2026-11-06) for unwrapping, Golem.de for a consent given once. */
+private fun devLink(feed: String): String? = when (feed) {
+    "Der Postillon" -> "https://api.follow.it/track-rss-story-click/v3/hVR569XapuSu2Y10IQaUZBKylwdMW3JA?utm_source=follow.it"
+    "xkcd" -> "https://xkcd.com/3319/"
+    "Golem.de" -> "https://www.golem.de/" // redirects to its consent page until consent is given
+    else -> null
 }
 
 private val WIDE_IMAGE = java.util.Base64.getEncoder().encodeToString(

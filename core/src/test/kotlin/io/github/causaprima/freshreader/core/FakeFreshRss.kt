@@ -37,6 +37,8 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         val read: Boolean = false,
         /** The Feed Content, as HTML. */
         val content: String = "<p>$title</p>",
+        /** The link to the Article's page, as the Feed delivers it. */
+        val url: String = "https://example.org/$id",
     )
 
     var username = "reader"
@@ -91,9 +93,11 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         published: Long,
         read: Boolean = false,
         content: String = "<p>$title</p>",
+        url: String? = null,
     ) {
         if (feeds.none { it.title == feedTitle }) addFeed(feedTitle, "Uncategorized")
-        articles += FakeArticle(articles.size + 1L, title, feedTitle, published, read, content)
+        val id = articles.size + 1L
+        articles += FakeArticle(id, title, feedTitle, published, read, content, url ?: "https://example.org/$id")
     }
 
     private fun feedOf(article: FakeArticle) = feeds.first { it.title == article.feedTitle }
@@ -175,9 +179,9 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                         put("crawlTimeMsec", "${a.id}000")
                         put("published", a.published)
                         put("title", a.title)
-                        putJsonArray("canonical") { addJsonObject { put("href", "https://example.org/${a.id}") } }
+                        putJsonArray("canonical") { addJsonObject { put("href", a.url) } }
                         putJsonArray("alternate") {
-                            addJsonObject { put("href", "https://example.org/${a.id}"); put("type", "text/html") }
+                            addJsonObject { put("href", a.url); put("type", "text/html") }
                         }
                         putJsonArray("categories") {
                             add("user/-/state/com.google/reading-list")

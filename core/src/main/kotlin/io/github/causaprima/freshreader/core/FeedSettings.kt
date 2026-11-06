@@ -7,14 +7,29 @@ import java.io.File
 /** The reader's preferences for one Feed, kept on the device. */
 @Serializable
 data class FeedSettings(
+    /** How the Article View shows this Feed's Articles. */
+    val viewMode: ViewMode = ViewMode.FeedContent,
     /** Show text the Feed hides in image titles and mail subjects visibly in the Article View. */
     val bonusText: Boolean = false,
 )
 
+/** How an Article is shown in the Article View. */
+@Serializable
+enum class ViewMode {
+    /** The Article content exactly as the Server delivers it, prepared by the Core. */
+    FeedContent,
+
+    /** The Article's web page on its own site, as-is, in the in-app browser. */
+    OriginalPage,
+}
+
 /** Keeps the Feed Settings on the device, by Feed id, which stays when a Feed is renamed. Not secret: plain JSON. */
 internal class FeedSettingsStore(dir: File) {
     private val file = File(dir, "feed-settings.json")
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        coerceInputValues = true // a View Mode this version does not know falls back to the default
+    }
 
     fun load(): Map<String, FeedSettings> {
         if (!file.isFile) return emptyMap()

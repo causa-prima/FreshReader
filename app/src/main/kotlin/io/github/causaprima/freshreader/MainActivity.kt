@@ -1,8 +1,11 @@
 package io.github.causaprima.freshreader
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -11,6 +14,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -28,6 +32,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -45,6 +51,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -60,7 +67,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -86,7 +95,9 @@ import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
+import io.github.causaprima.freshreader.core.ViewMode
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.Instant
@@ -96,6 +107,11 @@ import java.time.format.FormatStyle
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
+
+    override fun onStop() {
+        super.onStop()
+        CookieManager.getInstance().flush() // consents given in the in-app browser survive the app being killed
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -121,8 +137,9 @@ class MainActivity : ComponentActivity() {
                         ),
                     )
                     is Screen.ArticleView -> ArticleViewScreen(
-                        s, viewModel::articleDocument,
+                        s, viewModel::articlePage,
                         ArticleViewActions(
+                            originalPageUrl = viewModel::originalPageUrl,
                             onShow = viewModel::showArticle,
                             onClose = viewModel::closeArticle,
                             onOpenFeedSettings = viewModel::openFeedSettings,
@@ -220,6 +237,9 @@ private fun FailedScreen(outcome: Outcome, onRetry: () -> Unit) {
 
 /** Read Articles stay in the list until the next refresh, greyed out. */
 private const val READ_ALPHA = 0.45f
+
+/** Material's opacity for disabled content. */
+private const val DISABLED_ALPHA = 0.38f
 
 private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
 
@@ -447,6 +467,7 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
 
 /** What the reader can do in the Article View. */
 private class ArticleViewActions(
+    val originalPageUrl: suspend (Article) -> String?,
     val onShow: (Int) -> Unit,
     val onClose: () -> Unit,
     val onOpenFeedSettings: () -> Unit,
@@ -456,11 +477,12 @@ private class ArticleViewActions(
 
 /**
  * The Article View: a horizontal pager over the list snapshot. Arriving at an Article by swiping counts
- * as opening it. Each page shows the Core's prepared document in a WebView.
+ * as opening it. Each page shows, following its Feed's View Mode, the Core's prepared document or the
+ * Original Page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ArticleViewScreen(view: Screen.ArticleView, document: (Article) -> String, actions: ArticleViewActions) {
+private fun ArticleViewScreen(view: Screen.ArticleView, page: (Article) -> ArticlePage, actions: ArticleViewActions) {
     BackHandler(onBack = actions.onClose)
     val pagerState = rememberPagerState(initialPage = view.position) { view.articles.size }
     LaunchedEffect(pagerState) { snapshotFlow { pagerState.settledPage }.collect { actions.onShow(it) } }
@@ -473,7 +495,7 @@ private fun ArticleViewScreen(view: Screen.ArticleView, document: (Article) -> S
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
                     }
                 },
-                actions = { ArticleViewMenu(actions.onOpenFeedSettings) },
+                actions = { ArticleViewMenu(view.article, actions) },
             )
         },
     ) { padding ->
@@ -482,17 +504,28 @@ private fun ArticleViewScreen(view: Screen.ArticleView, document: (Article) -> S
             Modifier.fillMaxSize().padding(padding),
             beyondViewportPageCount = 1, // the neighbours are ready when the swipe starts
             key = { view.articles[it].id },
-        ) { page ->
-            val article = view.articles[page]
-            ArticleWebView(article, remember(article.id, view.revision) { document(article) })
+        ) { index ->
+            val article = view.articles[index]
+            when (val shown = remember(article.id, view.revision) { page(article) }) {
+                is ArticlePage.FeedContent -> ArticleWebView(article, shown.document)
+                ArticlePage.OriginalPage -> OriginalPageView(article, actions.originalPageUrl)
+            }
         }
     }
     view.feedSettings?.let { FeedSettingsBottomSheet(it, actions.onChangeFeedSettings, actions.onCloseFeedSettings) }
 }
 
+/** Feed Settings; and, if the Feed links the Article to a page, opening and sharing that page. */
 @Composable
-private fun ArticleViewMenu(onOpenFeedSettings: () -> Unit) {
+private fun ArticleViewMenu(article: Article, actions: ArticleViewActions) {
     var expanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    /** Runs [use] with the Original Page's link, tracking links unwrapped, which may take a request. */
+    fun withLink(use: (String) -> Unit) {
+        expanded = false
+        scope.launch { actions.originalPageUrl(article)?.let(use) }
+    }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(painterResource(R.drawable.ic_more_vert), stringResource(R.string.more_options))
@@ -502,10 +535,37 @@ private fun ArticleViewMenu(onOpenFeedSettings: () -> Unit) {
                 text = { Text(stringResource(R.string.feed_settings_open)) },
                 onClick = {
                     expanded = false
-                    onOpenFeedSettings()
+                    actions.onOpenFeedSettings()
                 },
             )
+            if (article.url != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.open_in_browser)) },
+                    onClick = { withLink { context.openExternally(Uri.parse(it)) } },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.share)) },
+                    onClick = {
+                        withLink { link ->
+                            val send = Intent(Intent.ACTION_SEND)
+                                .setType("text/plain")
+                                .putExtra(Intent.EXTRA_SUBJECT, article.title)
+                                .putExtra(Intent.EXTRA_TEXT, link)
+                            context.startActivity(Intent.createChooser(send, null))
+                        }
+                    },
+                )
+            }
         }
+    }
+}
+
+/** Hands [uri] to another app, e.g. the browser; stays here if no app can open it. */
+private fun Context.openExternally(uri: Uri) {
+    try {
+        startActivity(Intent(Intent.ACTION_VIEW, uri))
+    } catch (_: ActivityNotFoundException) {
+        // No app can open this link.
     }
 }
 
@@ -519,22 +579,85 @@ private fun FeedSettingsBottomSheet(sheet: FeedSettingsSheet, onChange: (FeedSet
             Modifier.padding(horizontal = 24.dp),
             style = MaterialTheme.typography.titleLarge,
         )
+        Column(Modifier.padding(top = 16.dp).selectableGroup()) {
+            ViewModeOption(sheet, ViewMode.FeedContent, R.string.view_mode_feed_content, R.string.view_mode_feed_content_hint, onChange)
+            ViewModeOption(sheet, ViewMode.OriginalPage, R.string.view_mode_original_page, R.string.view_mode_original_page_hint, onChange)
+        }
+        HorizontalDivider(Modifier.padding(horizontal = 24.dp))
+        val bonusTextApplies = sheet.settings.viewMode == ViewMode.FeedContent
         ListItem(
             headlineContent = { Text(stringResource(R.string.bonus_text)) },
             supportingContent = { Text(stringResource(R.string.bonus_text_hint)) },
             trailingContent = {
-                Switch(checked = sheet.settings.bonusText, onCheckedChange = null) // the whole row toggles
+                // The whole row toggles; Bonus Text only applies to Feed Content.
+                Switch(checked = sheet.settings.bonusText, onCheckedChange = null, enabled = bonusTextApplies)
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             modifier = Modifier
                 .padding(horizontal = 8.dp, vertical = 16.dp)
+                .alpha(if (bonusTextApplies) 1f else DISABLED_ALPHA)
                 .toggleable(
                     value = sheet.settings.bonusText,
+                    enabled = bonusTextApplies,
                     role = Role.Switch,
                     onValueChange = { onChange(sheet.settings.copy(bonusText = it)) },
                 ),
         )
     }
+}
+
+@Composable
+private fun ViewModeOption(
+    sheet: FeedSettingsSheet,
+    mode: ViewMode,
+    @StringRes label: Int,
+    @StringRes hint: Int,
+    onChange: (FeedSettings) -> Unit,
+) {
+    val selected = sheet.settings.viewMode == mode
+    ListItem(
+        headlineContent = { Text(stringResource(label)) },
+        supportingContent = { Text(stringResource(hint)) },
+        leadingContent = { RadioButton(selected = selected, onClick = null) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .padding(horizontal = 8.dp)
+            .selectable(selected, role = Role.RadioButton) { onChange(sheet.settings.copy(viewMode = mode)) },
+    )
+}
+
+/**
+ * The Article's Original Page in the in-app browser. Its cookies are kept by the WebView's cookie store, so a
+ * consent given once stays given. Links stay in the browser; other schemes, e.g. mailto:, go to other apps.
+ */
+@Composable
+private fun OriginalPageView(article: Article, originalPageUrl: suspend (Article) -> String?) {
+    val url by produceState<String?>(null, article.id) { value = originalPageUrl(article) }
+    val link = url ?: return Centered { CircularProgressIndicator() }
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            WebView(context).apply {
+                settings.apply {
+                    javaScriptEnabled = true // pages and their consent banners need it
+                    domStorageEnabled = true
+                    setSupportZoom(true)
+                    builtInZoomControls = true
+                    displayZoomControls = false
+                    allowFileAccess = false
+                    allowContentAccess = false
+                }
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                        if (request.url.scheme in setOf("http", "https")) return false
+                        view.context.openExternally(request.url)
+                        return true
+                    }
+                }
+                loadUrl(link)
+            }
+        },
+    )
 }
 
 /** One Article's document in a WebView. JavaScript stays off, zoom is disabled, and links open in the browser. */
@@ -555,11 +678,7 @@ private fun ArticleWebView(article: Article, document: String) {
                 }
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                        try {
-                            view.context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
-                        } catch (_: ActivityNotFoundException) {
-                            // No app can open this link; stay on the Article.
-                        }
+                        view.context.openExternally(request.url)
                         return true
                     }
                 }
