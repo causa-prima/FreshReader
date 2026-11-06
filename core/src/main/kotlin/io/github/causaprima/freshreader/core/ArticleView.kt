@@ -8,9 +8,14 @@ import java.time.format.DateTimeFormatter
 
 /**
  * The Article prepared for the Article View: one HTML document with a header (title, Feed, publication
- * date) followed by the Feed Content, laid out to the screen width and not zoomable.
+ * date) followed by [content], by default the Feed Content, laid out to the screen width and not zoomable.
  */
-internal fun articleViewDocument(article: Article, settings: FeedSettings, dateFormat: DateTimeFormatter): String {
+internal fun articleViewDocument(
+    article: Article,
+    settings: FeedSettings,
+    dateFormat: DateTimeFormatter,
+    content: String = article.content,
+): String {
     val date = dateFormat.format(Instant.ofEpochSecond(article.published))
     return """
         |<!DOCTYPE html>
@@ -26,7 +31,7 @@ internal fun articleViewDocument(article: Article, settings: FeedSettings, dateF
         |<p class="meta">${escapeHtml(article.feedTitle)} · ${escapeHtml(date)}</p>
         |</header>
         |<article>
-        |${prepareFeedContent(article.content, settings)}
+        |${prepareContent(content, settings)}
         |</article>
         |</body>
         |</html>
@@ -50,8 +55,8 @@ private const val BONUS_TEXT = "bonus-text"
 private val PLAIN_HTTP = Regex("""^http://""", RegexOption.IGNORE_CASE)
 private val PLAIN_HTTP_IN_SRCSET = Regex("""(^|,)(\s*)http://""", RegexOption.IGNORE_CASE)
 
-/** Feed Content as the Article View shows it, following the Feed's [settings]. */
-private fun prepareFeedContent(html: String, settings: FeedSettings): String {
+/** Feed Content or a Reader View's main content as the Article View shows it, following the Feed's [settings]. */
+private fun prepareContent(html: String, settings: FeedSettings): String {
     val document = Jsoup.parseBodyFragment(html)
     document.outputSettings().prettyPrint(false)
     val content = document.body()

@@ -62,11 +62,15 @@ private fun devContent(feed: String): String = when (feed) {
     """.trimIndent()
 }
 
-/** Real links, so that the Original Page can be checked on the device: Der Postillon's follow.it tracking link (captured 2026-11-06) for unwrapping, Golem.de for a consent given once. */
+/**
+ * Real links, so that the Original Page and the Reader View can be checked on the device: Der Postillon's follow.it
+ * tracking link (captured 2026-11-06) for unwrapping and its consent wall, a Golem.de Article for a consent given once.
+ */
 private fun devLink(feed: String): String? = when (feed) {
     "Der Postillon" -> "https://api.follow.it/track-rss-story-click/v3/hVR569XapuSu2Y10IQaUZBKylwdMW3JA?utm_source=follow.it"
     "xkcd" -> "https://xkcd.com/3319/"
-    "Golem.de" -> "https://www.golem.de/" // redirects to its consent page until consent is given
+    // redirects to its consent page until consent is given
+    "Golem.de" -> "https://www.golem.de/news/copernicus-2026-liegt-fast-sicher-ueber-der-1-5-grad-marke-2611-214939.html"
     else -> null
 }
 
