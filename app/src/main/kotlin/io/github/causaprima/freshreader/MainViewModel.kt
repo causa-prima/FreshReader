@@ -3,6 +3,7 @@ package io.github.causaprima.freshreader
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.Section
@@ -20,6 +21,8 @@ sealed interface Screen {
     data class Failed(val outcome: Outcome) : Screen
     data class Articles(val sections: List<Section>) : Screen
     data class ReadingOrder(val categories: List<String>) : Screen
+    /** [document]: the Article prepared by the Core, an HTML document with header and Feed Content. */
+    data class ArticleView(val article: Article, val document: String) : Screen
 }
 
 /** Translates Core Outcomes into Screens. Holds no business rules. */
@@ -54,6 +57,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun retry() {
         _screen.value = Screen.Loading
         viewModelScope.launch { refresh() }
+    }
+
+    fun openArticle(article: Article) {
+        _screen.value = Screen.ArticleView(article, core.prepareArticleView(article))
+    }
+
+    fun closeArticle() {
+        _screen.value = Screen.Articles(core.sections)
     }
 
     fun openReadingOrder() {

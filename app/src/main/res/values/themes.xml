@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+    Light and dark variants of the window theme. Compose draws its own colours, but the WebView of the
+    Article View takes `prefers-color-scheme` from whether this theme is light.
+    -->
+    <style name="Theme.FreshReader" parent="@android:style/Theme.Material.Light.NoActionBar" />
+</resources>

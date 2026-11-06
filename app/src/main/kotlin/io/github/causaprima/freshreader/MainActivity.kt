@@ -1,12 +1,19 @@
 package io.github.causaprima.freshreader
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,6 +44,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,6 +60,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Outcome
@@ -71,11 +81,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             FreshReaderTheme {
                 val screen by viewModel.screen.collectAsStateWithLifecycle()
+                // Lives outside the screens so that the list keeps its position while an Article is open.
+                val listState = rememberLazyListState()
                 when (val s = screen) {
                     Screen.Loading -> Centered { CircularProgressIndicator() }
                     is Screen.Login -> LoginScreen(s, viewModel::logIn)
                     is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry)
-                    is Screen.Articles -> ArticleListScreen(s.sections, viewModel::openReadingOrder)
+                    is Screen.Articles -> ArticleListScreen(
+                        s.sections, listState, viewModel::openArticle, viewModel::openReadingOrder,
+                    )
+                    is Screen.ArticleView -> ArticleViewScreen(s.article, s.document, viewModel::closeArticle)
                     is Screen.ReadingOrder -> ReadingOrderScreen(
                         s.categories, viewModel::setReadingOrder, viewModel::closeReadingOrder,
                     )
@@ -168,7 +183,12 @@ private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ArticleListScreen(sections: List<Section>, onOpenReadingOrder: () -> Unit) {
+private fun ArticleListScreen(
+    sections: List<Section>,
+    listState: LazyListState,
+    onOpenArticle: (Article) -> Unit,
+    onOpenReadingOrder: () -> Unit,
+) {
     val total = sections.sumOf { it.unreadCount }
     Scaffold(
         topBar = {
@@ -188,10 +208,10 @@ private fun ArticleListScreen(sections: List<Section>, onOpenReadingOrder: () ->
             }
             return@Scaffold
         }
-        LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding), state = listState) {
             sections.forEach { section ->
                 stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
-                items(section.articles, key = { it.id }) { article -> ArticleEntry(article) }
+                items(section.articles, key = { it.id }) { article -> ArticleEntry(article, onOpenArticle) }
             }
         }
     }
@@ -214,8 +234,8 @@ private fun SectionHeader(section: Section) {
 }
 
 @Composable
-private fun ArticleEntry(article: Article) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+private fun ArticleEntry(article: Article, onOpen: (Article) -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable { onOpen(article) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
         Text(article.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
         Text(
             "${article.feedTitle} · ${dateFormat.format(Instant.ofEpochSecond(article.published))}",
@@ -295,3 +315,56 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
         }
     }
 }
+
+/**
+ * The Article View: the Core's prepared document in a WebView. JavaScript stays off, zoom is disabled,
+ * and links open in the browser instead of replacing the Article.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ArticleViewScreen(article: Article, document: String, onClose: () -> Unit) {
+    BackHandler(onBack = onClose)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        key(article.id) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                factory = { context ->
+                    WebView(context).apply {
+                        setBackgroundColor(Color.TRANSPARENT)
+                        settings.apply {
+                            javaScriptEnabled = false
+                            setSupportZoom(false)
+                            builtInZoomControls = false
+                            displayZoomControls = false
+                            allowFileAccess = false
+                            allowContentAccess = false
+                        }
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                                try {
+                                    view.context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                                } catch (_: ActivityNotFoundException) {
+                                    // No app can open this link; stay on the Article.
+                                }
+                                return true
+                            }
+                        }
+                        loadDataWithBaseURL(article.url, document, "text/html", "utf-8", null)
+                    }
+                },
+            )
+        }
+    }
+}
+

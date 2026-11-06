@@ -4,6 +4,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.io.File
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 
 /** The result of talking to the Server. */
 sealed interface Outcome {
@@ -23,6 +27,8 @@ data class Article(
     /** Publication time in epoch seconds. */
     val published: Long,
     val url: String?,
+    /** The Feed Content: the Article's HTML exactly as the Server delivers it. */
+    val content: String = "",
 )
 
 /** One Category's part of the list snapshot. */
@@ -37,7 +43,13 @@ class Core(
     storeDir: File,
     secretBox: SecretBox,
     httpClient: OkHttpClient = OkHttpClient(),
+    /** Time zone and locale of the dates shown to the reader. */
+    zone: ZoneId = ZoneId.systemDefault(),
+    locale: Locale = Locale.getDefault(),
 ) {
+    private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+        .withLocale(locale)
+        .withZone(zone)
     private val http = httpClient
     private val credentialStore = CredentialStore(storeDir, secretBox)
     private var api: GoogleReaderApi? = null
@@ -95,6 +107,9 @@ class Core(
         sections = buildSections(unread, categoryOfFeed, readingOrder)
         return Outcome.Ok
     }
+
+    /** Prepares [article] for the Article View: an HTML document with header and Feed Content. */
+    fun prepareArticleView(article: Article): String = articleViewDocument(article, dateFormat)
 
     /** Replaces the Reading Order: the reader's chosen sequence of Categories, by name. */
     suspend fun setReadingOrder(order: List<String>) {

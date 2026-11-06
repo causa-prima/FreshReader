@@ -117,6 +117,9 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
         val published: Long = 0,
         val alternate: List<Link> = emptyList(),
         val origin: Origin? = null,
+        /** FreshRSS's "compat" mode, which it always uses for streams, puts the Feed Content here. */
+        val summary: Content? = null,
+        val content: Content? = null,
     ) {
         fun toArticle() = Article(
             id = id,
@@ -125,11 +128,15 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
             feedTitle = origin?.title.orEmpty(),
             published = published,
             url = alternate.firstOrNull()?.href,
+            content = summary?.content ?: content?.content.orEmpty(),
         )
     }
 
     @Serializable
     private class Link(val href: String)
+
+    @Serializable
+    private class Content(val content: String = "")
 
     @Serializable
     private class Origin(val streamId: String? = null, val title: String? = null)
