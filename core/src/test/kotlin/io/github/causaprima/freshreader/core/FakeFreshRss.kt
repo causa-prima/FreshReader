@@ -20,6 +20,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Mirrors the behaviour of FreshRSS's `p/api/greader.php` (edge): ClientLogin answers 401 on a wrong
  * API password, API calls without a valid `GoogleLogin auth=` header answer 401, and `stream/contents`
  * only sends a `continuation` when the page was full, and `subscription/list` requires `output=json`.
+ * Like FreshRSS, `stream/contents` always answers in its "compat" mode: the Feed Content is in
+ * `summary.content`, not `content.content`.
  */
 class FakeFreshRss : Dispatcher(), AutoCloseable {
     /** [listed] = false: the Feed is missing from `subscription/list`, e.g. subscribed between two requests. */
@@ -31,6 +33,8 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         val feedTitle: String,
         val published: Long,
         val read: Boolean = false,
+        /** The Feed Content, as HTML. */
+        val content: String = "<p>$title</p>",
     )
 
     var username = "reader"
@@ -67,9 +71,15 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         FakeFeed(feeds.size + 1L, title, category, listed).also { feeds += it }
 
     /** Adds an Article; a Feed not added before is created in the Category "Uncategorized". */
-    fun addArticle(title: String, feedTitle: String = "Feed", published: Long, read: Boolean = false) {
+    fun addArticle(
+        title: String,
+        feedTitle: String = "Feed",
+        published: Long,
+        read: Boolean = false,
+        content: String = "<p>$title</p>",
+    ) {
         if (feeds.none { it.title == feedTitle }) addFeed(feedTitle, "Uncategorized")
-        articles += FakeArticle(articles.size + 1L, title, feedTitle, published, read)
+        articles += FakeArticle(articles.size + 1L, title, feedTitle, published, read, content)
     }
 
     private fun feedOf(article: FakeArticle) = feeds.first { it.title == article.feedTitle }
@@ -148,7 +158,7 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                             put("htmlUrl", "https://example.org/")
                             put("title", a.feedTitle)
                         }
-                        putJsonObject("content") { put("content", "<p>${a.title}</p>") }
+                        putJsonObject("summary") { put("content", a.content) }
                     }
                 }
             }
