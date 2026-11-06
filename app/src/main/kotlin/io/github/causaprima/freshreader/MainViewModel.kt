@@ -10,6 +10,7 @@ import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
+import io.github.causaprima.freshreader.core.ReaderView
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
 import io.github.causaprima.freshreader.core.ViewMode
@@ -58,6 +59,9 @@ sealed interface Screen {
 sealed interface ArticlePage {
     /** The Core's prepared document: header and Feed Content. */
     data class FeedContent(val document: String) : ArticlePage
+
+    /** The Article's web page reduced to its main content, extracted from the page in the in-app browser. */
+    data object ReaderView : ArticlePage
 
     /** The Article's web page, in the in-app browser. */
     data object OriginalPage : ArticlePage
@@ -181,12 +185,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** What the Article View shows for [article], following its Feed's View Mode. */
-    fun articlePage(article: Article): ArticlePage =
-        if (core.feedSettings(article.feedId).viewMode == ViewMode.OriginalPage && article.url != null) {
-            ArticlePage.OriginalPage
-        } else {
-            ArticlePage.FeedContent(core.prepareArticleView(article))
+    fun articlePage(article: Article): ArticlePage = when {
+        article.url == null -> ArticlePage.FeedContent(core.prepareArticleView(article))
+        else -> when (core.feedSettings(article.feedId).viewMode) {
+            ViewMode.FeedContent -> ArticlePage.FeedContent(core.prepareArticleView(article))
+            ViewMode.ReaderView -> ArticlePage.ReaderView
+            ViewMode.OriginalPage -> ArticlePage.OriginalPage
         }
+    }
+
+    /** The script to run in a loaded Original Page for the Reader View. */
+    val readerViewScript: String get() = core.readerViewScript
+
+    /** What the Reader View shows of [article], from the script's [report] on its loaded Original Page. */
+    fun readerView(article: Article, report: String): ReaderView = core.readerView(article, report)
 
     /** The link to [article]'s Original Page, tracking links unwrapped; null if the Feed gives none. */
     suspend fun originalPageUrl(article: Article): String? = core.originalPageUrl(article)

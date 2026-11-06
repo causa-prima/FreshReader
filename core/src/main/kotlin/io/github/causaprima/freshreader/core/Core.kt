@@ -270,6 +270,23 @@ class Core(
     fun prepareArticleView(article: Article): String =
         articleViewDocument(article, feedSettings(article.feedId), dateFormat)
 
+    /** The script to run in a loaded Original Page; [readerView] reads its result. */
+    val readerViewScript: String get() = READER_VIEW_SCRIPT
+
+    /**
+     * The Reader View of [article], from [report]: the result of the Reader View script in its loaded Original
+     * Page, as `evaluateJavascript` returns it.
+     */
+    fun readerView(article: Article, report: String): ReaderView {
+        val page = pageReport(report) ?: return ReaderView.Failed
+        page.tcf?.let { consentManager ->
+            if (!consentManager.loaded) return ReaderView.NotYet
+            if (consentManager.displayStatus == "visible") return ReaderView.ConsentNeeded
+        }
+        val content = page.content ?: return ReaderView.Failed
+        return ReaderView.Ready(articleViewDocument(article, feedSettings(article.feedId), dateFormat, content))
+    }
+
     /** Replaces the Reading Order: the reader's chosen sequence of Categories, by name. */
     suspend fun setReadingOrder(order: List<String>) {
         withContext(Dispatchers.IO) { readingOrderStore.save(order) }

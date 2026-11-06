@@ -19,6 +19,9 @@ enum class ViewMode {
     /** The Article content exactly as the Server delivers it, prepared by the Core. */
     FeedContent,
 
+    /** The Article's web page reduced to its main content, laid out like Feed Content. */
+    ReaderView,
+
     /** The Article's web page on its own site, as-is, in the in-app browser. */
     OriginalPage,
 }

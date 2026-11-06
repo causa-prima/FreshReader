@@ -1,10 +1,12 @@
 package io.github.causaprima.freshreader
 
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -70,22 +72,28 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.relocation.BringIntoViewModifierNode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -101,13 +109,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
+import io.github.causaprima.freshreader.core.ReaderView
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
 import io.github.causaprima.freshreader.core.ViewMode
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -146,6 +158,8 @@ class MainActivity : ComponentActivity() {
                         s, viewModel::articlePage,
                         ArticleViewActions(
                             originalPageUrl = viewModel::originalPageUrl,
+                            readerViewScript = viewModel.readerViewScript,
+                            readerView = viewModel::readerView,
                             onShow = viewModel::showArticle,
                             onClose = viewModel::closeArticle,
                             onOpenFeedSettings = viewModel::openFeedSettings,
@@ -520,6 +534,8 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
 /** What the reader can do in the Article View. */
 private class ArticleViewActions(
     val originalPageUrl: suspend (Article) -> String?,
+    val readerViewScript: String,
+    val readerView: (Article, String) -> ReaderView,
     val onShow: (Int) -> Unit,
     val onClose: () -> Unit,
     val onOpenFeedSettings: () -> Unit,
@@ -529,8 +545,8 @@ private class ArticleViewActions(
 
 /**
  * The Article View: a horizontal pager over the list snapshot. Arriving at an Article by swiping counts
- * as opening it. Each page shows, following its Feed's View Mode, the Core's prepared document or the
- * Original Page.
+ * as opening it. Each page shows, following its Feed's View Mode, the Core's prepared document, the Reader View
+ * or the Original Page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -560,6 +576,7 @@ private fun ArticleViewScreen(view: Screen.ArticleView, page: (Article) -> Artic
             val article = view.articles[index]
             when (val shown = remember(article.id, view.revision) { page(article) }) {
                 is ArticlePage.FeedContent -> ArticleWebView(article, shown.document)
+                ArticlePage.ReaderView -> ReaderViewPage(article, index == pagerState.currentPage, view.revision, actions)
                 ArticlePage.OriginalPage -> OriginalPageView(article, actions.originalPageUrl)
             }
         }
@@ -633,15 +650,16 @@ private fun FeedSettingsBottomSheet(sheet: FeedSettingsSheet, onChange: (FeedSet
         )
         Column(Modifier.padding(top = 16.dp).selectableGroup()) {
             ViewModeOption(sheet, ViewMode.FeedContent, R.string.view_mode_feed_content, R.string.view_mode_feed_content_hint, onChange)
+            ViewModeOption(sheet, ViewMode.ReaderView, R.string.view_mode_reader_view, R.string.view_mode_reader_view_hint, onChange)
             ViewModeOption(sheet, ViewMode.OriginalPage, R.string.view_mode_original_page, R.string.view_mode_original_page_hint, onChange)
         }
         HorizontalDivider(Modifier.padding(horizontal = 24.dp))
-        val bonusTextApplies = sheet.settings.viewMode == ViewMode.FeedContent
+        val bonusTextApplies = sheet.settings.viewMode != ViewMode.OriginalPage
         ListItem(
             headlineContent = { Text(stringResource(R.string.bonus_text)) },
             supportingContent = { Text(stringResource(R.string.bonus_text_hint)) },
             trailingContent = {
-                // The whole row toggles; Bonus Text only applies to Feed Content.
+                // The whole row toggles; Bonus Text applies to Feed Content and the Reader View.
                 Switch(checked = sheet.settings.bonusText, onCheckedChange = null, enabled = bonusTextApplies)
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
@@ -680,37 +698,130 @@ private fun ViewModeOption(
 
 /**
  * The Article's Original Page in the in-app browser. Its cookies are kept by the WebView's cookie store, so a
- * consent given once stays given. Links stay in the browser; other schemes, e.g. mailto:, go to other apps.
+ * consent given once stays given.
  */
 @Composable
 private fun OriginalPageView(article: Article, originalPageUrl: suspend (Article) -> String?) {
     val url by produceState<String?>(null, article.id) { value = originalPageUrl(article) }
     val link = url ?: return Centered { CircularProgressIndicator() }
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { context ->
-            WebView(context).apply {
-                settings.apply {
-                    javaScriptEnabled = true // pages and their consent banners need it
-                    domStorageEnabled = true
-                    setSupportZoom(true)
-                    builtInZoomControls = true
-                    displayZoomControls = false
-                    allowFileAccess = false
-                    allowContentAccess = false
-                }
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                        if (request.url.scheme in setOf("http", "https")) return false
-                        view.context.openExternally(request.url)
-                        return true
-                    }
-                }
-                loadUrl(link)
-            }
-        },
-    )
+    AndroidView(modifier = Modifier.fillMaxSize().keepPagerStill(), factory = { context -> inAppBrowser(context).apply { loadUrl(link) } })
 }
+
+/**
+ * The Reader View. The Original Page loads in the in-app browser, hidden, and the Core's script reports from it what
+ * to show: its main content, laid out like Feed Content; or, while the page's consent wall waits for the reader's
+ * decision, the page itself, checked every second until the wall is gone; or the page, if it has no main content.
+ * A neighbouring page that met a wall waits until it is [shown] and then loads again, as the reader may have
+ * consented on another page meanwhile.
+ */
+@Composable
+private fun ReaderViewPage(article: Article, shown: Boolean, revision: Int, actions: ArticleViewActions) {
+    val url by produceState<String?>(null, article.id) { value = actions.originalPageUrl(article) }
+    val link = url ?: return Centered { CircularProgressIndicator() }
+    var browser by remember(link) { mutableStateOf<WebView?>(null) }
+    var pagesLoaded by remember(link) { mutableIntStateOf(0) }
+    var report by remember(link) { mutableStateOf<String?>(null) }
+    var state by remember(link) { mutableStateOf<ReaderView>(ReaderView.NotYet) }
+    val isShown by rememberUpdatedState(shown)
+    Box(Modifier.fillMaxSize().keepPagerStill()) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { context -> inAppBrowser(context, onPageFinished = { pagesLoaded++ }).apply { browser = this; loadUrl(link) } },
+        )
+        when (val current = state) {
+            // Opaque, as the Article View's own background is transparent and the page lies beneath.
+            is ReaderView.Ready -> Surface(Modifier.fillMaxSize()) { ArticleWebView(article, current.document) }
+            ReaderView.NotYet -> Centered { CircularProgressIndicator() }
+            ReaderView.ConsentNeeded, ReaderView.Failed -> Unit // the page itself shows
+        }
+    }
+    // Each loaded page, e.g. the Article after a consent page, is checked again.
+    LaunchedEffect(browser, pagesLoaded) {
+        val page = browser ?: return@LaunchedEffect
+        if (pagesLoaded == 0) return@LaunchedEffect
+        delay(READER_VIEW_SETTLE_MILLIS) // consent managers start after the page has loaded
+        var waited = 0L
+        while (true) {
+            val latest = page.evaluate(actions.readerViewScript).also { report = it }
+            val result = actions.readerView(article, latest)
+            state = if (result == ReaderView.NotYet && waited >= READER_VIEW_MAX_WAIT_MILLIS) ReaderView.Failed else result
+            val pause = when (state) {
+                ReaderView.NotYet -> READER_VIEW_RETRY_MILLIS
+                ReaderView.ConsentNeeded -> {
+                    if (!isShown) {
+                        snapshotFlow { isShown }.first { it }
+                        page.reload()
+                        return@LaunchedEffect
+                    }
+                    READER_VIEW_CONSENT_RETRY_MILLIS
+                }
+                is ReaderView.Ready, ReaderView.Failed -> return@LaunchedEffect
+            }
+            delay(pause)
+            waited += pause
+        }
+    }
+    // Feed Settings changes, e.g. Bonus Text, prepare the same main content again.
+    LaunchedEffect(revision) {
+        val latest = report ?: return@LaunchedEffect
+        if (state is ReaderView.Ready) state = actions.readerView(article, latest)
+    }
+}
+
+/** Runs [script] in the shown page and returns its result as JSON; `null` if it could not run. */
+private suspend fun WebView.evaluate(script: String): String =
+    suspendCancellableCoroutine { result -> evaluateJavascript(script) { result.resume(it ?: "null") } }
+
+/**
+ * The in-app browser for Original Pages. JavaScript and DOM storage are on, as pages and their consent managers
+ * need them; the cookies, and with them consents, are kept. Links stay in the browser; other schemes, e.g.
+ * mailto:, go to other apps.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+private fun inAppBrowser(context: Context, onPageFinished: () -> Unit = {}): WebView = WebView(context).apply {
+    // Measured to an exact height. Otherwise the WebView takes 0 as its viewport height, and so does CSS `vh`:
+    // consent walls sized to the screen collapse to nothing.
+    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    settings.apply {
+        javaScriptEnabled = true
+        domStorageEnabled = true
+        setSupportZoom(true)
+        builtInZoomControls = true
+        displayZoomControls = false
+        allowFileAccess = false
+        allowContentAccess = false
+    }
+    webViewClient = object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            if (request.url.scheme in setOf("http", "https")) return false
+            view.context.openExternally(request.url)
+            return true
+        }
+
+        override fun onPageFinished(view: WebView, url: String) = onPageFinished()
+    }
+}
+
+/**
+ * Keeps requests to scroll a page into view from reaching the pager. An in-app browser makes such requests, e.g.
+ * when a consent wall focuses its button, also on a neighbouring page the pager has loaded in advance; passed on,
+ * they would swipe the pager to that page, which then counts as opened and is marked as read.
+ */
+private fun Modifier.keepPagerStill(): Modifier = this then KeepPagerStill
+
+private data object KeepPagerStill : ModifierNodeElement<KeepPagerStillNode>() {
+    override fun create() = KeepPagerStillNode()
+    override fun update(node: KeepPagerStillNode) = Unit
+}
+
+private class KeepPagerStillNode : Modifier.Node(), BringIntoViewModifierNode {
+    override suspend fun bringIntoView(childCoordinates: LayoutCoordinates, boundsProvider: () -> ComposeRect?) = Unit
+}
+
+private const val READER_VIEW_SETTLE_MILLIS = 1500L
+private const val READER_VIEW_RETRY_MILLIS = 500L
+private const val READER_VIEW_CONSENT_RETRY_MILLIS = 1000L
+private const val READER_VIEW_MAX_WAIT_MILLIS = 10_000L
 
 /** One Article's document in a WebView. JavaScript stays off, zoom is disabled, and links open in the browser. */
 @Composable
