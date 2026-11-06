@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import java.io.File
+import java.time.Clock
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -70,6 +71,8 @@ class Core(
     /** Time zone and locale of the dates shown to the reader. */
     zone: ZoneId = ZoneId.systemDefault(),
     locale: Locale = Locale.getDefault(),
+    /** The time the Articles' ages are counted against. */
+    private val clock: Clock = Clock.systemUTC(),
     /** Wait before the first retry of read marks after a transient failure; doubles with each retry. */
     private val firstRetryDelay: Duration = 2.seconds,
 ) : AutoCloseable {
@@ -88,6 +91,9 @@ class Core(
     private var feedSettings: Map<String, FeedSettings> = feedSettingsStore.load()
     private var unread: List<Article> = emptyList()
     private var categoryOfFeed: Map<String, String> = emptyMap()
+    @Volatile
+    private var iconUrlOfFeed: Map<String, String> = emptyMap()
+    private val favicons = Favicons(httpClient)
     /** Ids of the snapshot's Articles that the reader has read since the last refresh. */
     private val readIds = mutableSetOf<String>()
 
@@ -144,7 +150,7 @@ class Core(
             is ApiResult.Success -> session.value
             is ApiResult.Failure -> return session.outcome
         }
-        val categories = when (val result = api.feedCategories()) {
+        val feeds = when (val result = api.feeds()) {
             is ApiResult.Success -> result.value
             is ApiResult.Failure -> return result.outcome
         }
@@ -154,7 +160,8 @@ class Core(
         }
         val pending = outboxLock.withLock { outbox.toSet() }
         this.unread = unread.filterNot { it.id in pending }
-        categoryOfFeed = categories
+        categoryOfFeed = feeds.mapValues { it.value.category }
+        iconUrlOfFeed = feeds.mapNotNull { (id, feed) -> feed.iconUrl?.let { id to it } }.toMap()
         readIds.clear()
         rebuildSections()
         return Outcome.Ok
@@ -240,6 +247,23 @@ class Core(
 
     private fun rebuildSections() {
         sections = buildSections(unread.map { it.copy(read = it.id in readIds) }, categoryOfFeed, readingOrder)
+    }
+
+    /** The favicon of [article]'s Feed as image bytes; null if the Feed has none of its own or it cannot be loaded. */
+    suspend fun favicon(article: Article): ByteArray? {
+        val url = iconUrlOfFeed[article.feedId] ?: return null
+        return withContext(Dispatchers.IO) { favicons.load(url) }
+    }
+
+    /** How long ago [article] was published, short enough for a list entry: "5 min", "3 h", "2 d". */
+    fun age(article: Article): String {
+        // A publication date slightly in the future (clocks differ) counts as just now.
+        val minutes = (clock.instant().epochSecond - article.published).coerceAtLeast(0) / 60
+        return when {
+            minutes < 60 -> "$minutes min"
+            minutes < 24 * 60 -> "${minutes / 60} h"
+            else -> "${minutes / (24 * 60)} d"
+        }
     }
 
     /** Prepares [article] for the Article View: an HTML document with header and Feed Content. */

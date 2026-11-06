@@ -1,6 +1,9 @@
 package io.github.causaprima.freshreader
 
 import android.app.Application
+import android.graphics.ImageDecoder
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.causaprima.freshreader.core.Article
@@ -17,6 +20,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentHashMap
 
 sealed interface Screen {
     data object Loading : Screen
@@ -59,6 +65,18 @@ sealed interface ArticlePage {
 
 /** The Feed Settings sheet for one Feed, showing its current [settings]. */
 data class FeedSettingsSheet(val feedId: String, val feedTitle: String, val settings: FeedSettings)
+
+/** Decodes a favicon, scaled down to at most [FAVICON_PIXELS]; null for formats Android cannot decode, e.g. SVG. */
+private fun decodeFavicon(bytes: ByteArray): ImageBitmap? = try {
+    ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) { decoder, info, _ ->
+        val scale = FAVICON_PIXELS.toFloat() / maxOf(info.size.width, info.size.height)
+        if (scale < 1) decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
+    }.asImageBitmap()
+} catch (_: IOException) {
+    null
+}
+
+private const val FAVICON_PIXELS = 96
 
 /** Translates Core Outcomes into Screens. Holds no business rules. */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -147,6 +165,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val list = _screen.value as? Screen.Articles ?: return@launch
             _screen.value = list.copy(sections = core.sections, focus = null)
         }
+    }
+
+    /** How long ago [article] was published: "5 min", "3 h", "2 d". */
+    fun age(article: Article): String = core.age(article)
+
+    /** Decoded favicons by Feed id, so that scrolling does not decode them again. */
+    private val favicons = ConcurrentHashMap<String, ImageBitmap>()
+
+    /** The favicon of [article]'s Feed, small enough for a list entry; null if there is none or it cannot be shown. */
+    suspend fun favicon(article: Article): ImageBitmap? {
+        favicons[article.feedId]?.let { return it }
+        val bytes = core.favicon(article) ?: return null
+        return withContext(Dispatchers.Default) { decodeFavicon(bytes) }?.also { favicons[article.feedId] = it }
     }
 
     /** What the Article View shows for [article], following its Feed's View Mode. */
