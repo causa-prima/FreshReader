@@ -114,7 +114,12 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         if (!reachable) return dropConnection
         val path = request.url.encodedPath
         return when {
-            // Not part of FreshRSS: lets a manual check on the emulator switch edit-tag failures on and off.
+            // Not part of FreshRSS: lets a manual check on the emulator add Articles and switch edit-tag failures.
+            path == "/dev/add-article" -> {
+                val title = request.url.queryParameter("title") ?: "New Article"
+                addArticle(title, request.url.queryParameter("feed") ?: "Feed", published = System.currentTimeMillis() / 1000)
+                text(200, "added $title\n")
+            }
             path == "/dev/edit-tag-status" -> {
                 editTagStatus = request.url.queryParameter("code")?.toIntOrNull()
                 text(200, "edit-tag answers ${editTagStatus ?: "normally"}\n")

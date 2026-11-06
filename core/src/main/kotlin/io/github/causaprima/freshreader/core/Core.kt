@@ -175,6 +175,12 @@ class Core(
     }
 
     /**
+     * Marks every not-yet-read Article of the snapshot as read. Only the snapshot's Article ids are sent,
+     * so Articles that arrived on the Server since the last refresh stay unread.
+     */
+    suspend fun markAllAsRead() = openArticle(articles.lastIndex)
+
+    /**
      * Sends the outbox to the Server in batches. Transient failures are retried with exponential backoff
      * and stay invisible as Pending; any other failure stops sending until the next refresh or opened Article.
      */

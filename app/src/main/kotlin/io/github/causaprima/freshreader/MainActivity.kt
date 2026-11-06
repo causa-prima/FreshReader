@@ -38,14 +38,18 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -98,7 +102,14 @@ class MainActivity : ComponentActivity() {
                     is Screen.Login -> LoginScreen(s, viewModel::logIn)
                     is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry)
                     is Screen.Articles -> ArticleListScreen(
-                        s.sections, s.focus, syncStatus, listState, viewModel::openArticle, viewModel::openReadingOrder,
+                        s, syncStatus, listState,
+                        ListActions(
+                            onOpenArticle = viewModel::openArticle,
+                            onOpenReadingOrder = viewModel::openReadingOrder,
+                            onRefresh = viewModel::pullToRefresh,
+                            onRefreshErrorShown = viewModel::dismissRefreshError,
+                            onMarkAllAsRead = viewModel::markAllAsRead,
+                        ),
                     )
                     is Screen.ArticleView -> ArticleViewScreen(
                         s, viewModel::articleDocument, viewModel::showArticle, viewModel::closeArticle,
@@ -196,41 +207,72 @@ private const val READ_ALPHA = 0.45f
 
 private val dateFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault())
 
+/** What the reader can do on the list screen. */
+private class ListActions(
+    val onOpenArticle: (Article) -> Unit,
+    val onOpenReadingOrder: () -> Unit,
+    val onRefresh: () -> Unit,
+    val onRefreshErrorShown: () -> Unit,
+    val onMarkAllAsRead: () -> Unit,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ArticleListScreen(
-    sections: List<Section>,
-    focus: String?,
+    list: Screen.Articles,
     syncStatus: SyncStatus,
     listState: LazyListState,
-    onOpenArticle: (Article) -> Unit,
-    onOpenReadingOrder: () -> Unit,
+    actions: ListActions,
 ) {
+    val sections = list.sections
     val total = sections.sumOf { it.unreadCount }
-    LaunchedEffect(focus) { if (focus != null) bringIntoView(listState, sections, focus) }
+    LaunchedEffect(list.focus) { if (list.focus != null) bringIntoView(listState, sections, list.focus) }
+    val snackbars = remember { SnackbarHostState() }
+    val refreshError = list.refreshError?.let { outcomeMessage(it) }
+    LaunchedEffect(list.refreshError) {
+        if (refreshError != null) {
+            snackbars.showSnackbar(refreshError)
+            actions.onRefreshErrorShown()
+        }
+    }
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.list_title, total)) },
                 actions = {
                     if (syncStatus is SyncStatus.Failed) SyncFailedHint(syncStatus)
-                    IconButton(onClick = onOpenReadingOrder) {
+                    IconButton(onClick = actions.onOpenReadingOrder) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.reading_order_title))
                     }
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbars) },
     ) { padding ->
-        if (sections.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text(stringResource(R.string.list_empty))
-            }
-            return@Scaffold
-        }
-        LazyColumn(Modifier.fillMaxSize().padding(padding), state = listState) {
-            sections.forEach { section ->
-                stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
-                items(section.articles, key = { it.id }) { article -> ArticleEntry(article, onOpenArticle) }
+        PullToRefreshBox(
+            isRefreshing = list.refreshing,
+            onRefresh = actions.onRefresh,
+            modifier = Modifier.fillMaxSize().padding(padding),
+        ) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                if (sections.isEmpty()) {
+                    item(key = "empty") {
+                        Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(stringResource(R.string.list_empty))
+                        }
+                    }
+                }
+                sections.forEach { section ->
+                    stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
+                    items(section.articles, key = { it.id }) { article -> ArticleEntry(article, actions.onOpenArticle) }
+                }
+                if (total > 0) {
+                    item(key = "mark-all") {
+                        Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            OutlinedButton(onClick = actions.onMarkAllAsRead) { Text(stringResource(R.string.mark_all_as_read)) }
+                        }
+                    }
+                }
             }
         }
     }

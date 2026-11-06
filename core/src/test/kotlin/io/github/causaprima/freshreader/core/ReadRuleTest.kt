@@ -1,7 +1,6 @@
 package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
@@ -38,11 +37,6 @@ class ReadRuleTest {
 
     private fun newCore(firstRetryDelay: Duration = 10.milliseconds) =
         Core(storeDir = storeDir, secretBox = secretBox, firstRetryDelay = firstRetryDelay)
-
-    private suspend fun Core.awaitSyncStatus(predicate: (SyncStatus) -> Boolean): SyncStatus =
-        withTimeout(5.seconds) { syncStatus.first(predicate) }
-
-    private suspend fun Core.awaitSynced() = awaitSyncStatus { it == SyncStatus.Synced }
 
     /** Two Categories in Reading Order News, Pictures; the list reads News 1, News 2, Pictures 1, Pictures 2. */
     private fun addNewsAndPictures() = runBlocking<Unit> {

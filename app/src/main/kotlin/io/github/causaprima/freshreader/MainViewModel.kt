@@ -20,8 +20,16 @@ sealed interface Screen {
     data object Loading : Screen
     data class Login(val error: Outcome? = null, val busy: Boolean = false) : Screen
     data class Failed(val outcome: Outcome) : Screen
-    /** [focus]: id of the Article the list should bring into view, e.g. the last one shown in the Article View. */
-    data class Articles(val sections: List<Section>, val focus: String? = null) : Screen
+    /**
+     * The list snapshot. [focus]: id of the Article the list should bring into view, e.g. the last one shown
+     * in the Article View. [refreshError]: why the last pull-to-refresh failed, shown once; the list stays.
+     */
+    data class Articles(
+        val sections: List<Section>,
+        val focus: String? = null,
+        val refreshing: Boolean = false,
+        val refreshError: Outcome? = null,
+    ) : Screen
     data class ReadingOrder(val categories: List<String>) : Screen
     /** The Article View, swipeable over the list snapshot's [articles]; [position] is the Article shown. */
     data class ArticleView(val articles: List<Article>, val position: Int) : Screen {
@@ -82,6 +90,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val view = _screen.value as? Screen.ArticleView ?: return
         _screen.value = view.copy(position = position)
         applyReadRule(position)
+    }
+
+    /** Pull-to-refresh: replaces the snapshot. If the Server cannot be reached, the current list stays. */
+    fun pullToRefresh() {
+        val list = _screen.value as? Screen.Articles ?: return
+        _screen.value = list.copy(focus = null, refreshing = true, refreshError = null)
+        viewModelScope.launch {
+            opening?.join()
+            _screen.value = when (val outcome = withContext(Dispatchers.IO) { core.refresh() }) {
+                Outcome.Ok -> Screen.Articles(core.sections)
+                Outcome.WrongCredentials, Outcome.InvalidServerUrl -> Screen.Login(error = outcome)
+                is Outcome.Unreachable, is Outcome.ServerError ->
+                    Screen.Articles(core.sections, refreshError = outcome)
+            }
+        }
+    }
+
+    fun dismissRefreshError() {
+        val list = _screen.value as? Screen.Articles ?: return
+        _screen.value = list.copy(refreshError = null)
+    }
+
+    /** Marks every not-yet-read Article of the snapshot as read. */
+    fun markAllAsRead() {
+        val previous = opening
+        opening = viewModelScope.launch {
+            previous?.join()
+            core.markAllAsRead()
+            val list = _screen.value as? Screen.Articles ?: return@launch
+            _screen.value = list.copy(sections = core.sections, focus = null)
+        }
     }
 
     /** The Article prepared by the Core: an HTML document with header and Feed Content. */
