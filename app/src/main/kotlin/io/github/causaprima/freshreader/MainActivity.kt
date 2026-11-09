@@ -6,9 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -72,7 +76,9 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -102,6 +108,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -109,6 +116,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
+import io.github.causaprima.freshreader.core.PageLoad
 import io.github.causaprima.freshreader.core.ReaderView
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
@@ -119,7 +127,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -160,6 +171,7 @@ class MainActivity : ComponentActivity() {
                             originalPageUrl = viewModel::originalPageUrl,
                             readerViewScript = viewModel.readerViewScript,
                             readerView = viewModel::readerView,
+                            readerViewLoads = viewModel::readerViewLoads,
                             onShow = viewModel::showArticle,
                             onClose = viewModel::closeArticle,
                             onOpenFeedSettings = viewModel::openFeedSettings,
@@ -535,7 +547,8 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
 private class ArticleViewActions(
     val originalPageUrl: suspend (Article) -> String?,
     val readerViewScript: String,
-    val readerView: (Article, String) -> ReaderView,
+    val readerView: (Article, String, PageLoad, String) -> ReaderView,
+    val readerViewLoads: (Boolean, String?) -> Boolean,
     val onShow: (Int) -> Unit,
     val onClose: () -> Unit,
     val onOpenFeedSettings: () -> Unit,
@@ -554,6 +567,15 @@ private fun ArticleViewScreen(view: Screen.ArticleView, page: (Article) -> Artic
     BackHandler(onBack = actions.onClose)
     val pagerState = rememberPagerState(initialPage = view.position) { view.articles.size }
     LaunchedEffect(pagerState) { snapshotFlow { pagerState.settledPage }.collect { actions.onShow(it) } }
+    var renderers by remember { mutableIntStateOf(0) }
+    // Ids of the Articles whose page no longer loads. The neighbours load only once the shown page does not: loading
+    // all three at once, the shown page took more than twice as long to show its Reader View.
+    val loaded = remember { mutableStateMapOf<String, Unit>() }
+    val shownLoaded = view.articles[pagerState.currentPage].id in loaded
+    val onRendererGone: () -> Unit = {
+        renderers++
+        loaded.clear()
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -574,10 +596,28 @@ private fun ArticleViewScreen(view: Screen.ArticleView, page: (Article) -> Artic
             key = { view.articles[it].id },
         ) { index ->
             val article = view.articles[index]
-            when (val shown = remember(article.id, view.revision) { page(article) }) {
-                is ArticlePage.FeedContent -> ArticleWebView(article, shown.document)
-                ArticlePage.ReaderView -> ReaderViewPage(article, index == pagerState.currentPage, view.revision, actions)
-                ArticlePage.OriginalPage -> OriginalPageView(article, actions.originalPageUrl)
+            // A new renderer means new WebViews for every page.
+            key(renderers) {
+                val isShown = index == pagerState.currentPage
+                when (val shown = remember(article.id, view.revision) { page(article) }) {
+                    is ArticlePage.FeedContent -> {
+                        LaunchedEffect(Unit) { loaded[article.id] = Unit }
+                        ArticleWebView(article, shown.document, onRendererGone)
+                    }
+                    ArticlePage.ReaderView -> ReaderViewPage(
+                        article,
+                        isShown,
+                        loadNow = isShown || shownLoaded,
+                        onLoaded = { loaded[article.id] = Unit },
+                        view.revision,
+                        actions,
+                        onRendererGone,
+                    )
+                    ArticlePage.OriginalPage -> {
+                        LaunchedEffect(Unit) { loaded[article.id] = Unit }
+                        OriginalPageView(article, actions.originalPageUrl, onRendererGone)
+                    }
+                }
             }
         }
     }
@@ -701,56 +741,115 @@ private fun ViewModeOption(
  * consent given once stays given.
  */
 @Composable
-private fun OriginalPageView(article: Article, originalPageUrl: suspend (Article) -> String?) {
+private fun OriginalPageView(article: Article, originalPageUrl: suspend (Article) -> String?, onRendererGone: () -> Unit) {
     val url by produceState<String?>(null, article.id) { value = originalPageUrl(article) }
     val link = url ?: return Centered { CircularProgressIndicator() }
-    AndroidView(modifier = Modifier.fillMaxSize().keepPagerStill(), factory = { context -> inAppBrowser(context).apply { loadUrl(link) } })
+    AndroidView(
+        modifier = Modifier.fillMaxSize().keepPagerStill(),
+        factory = { context -> inAppBrowser(context, onRendererGone).apply { loadUrl(link) } },
+        onRelease = { it.destroy() },
+    )
 }
 
 /**
- * The Reader View. The Original Page loads in the in-app browser, hidden, and the Core's script reports from it what
- * to show: its main content, laid out like Feed Content; or, while the page's consent wall waits for the reader's
- * decision, the page itself, checked every second until the wall is gone; or the page, if it has no main content.
- * A neighbouring page that met a wall waits until it is [shown] and then loads again, as the reader may have
+ * The Reader View. The Original Page loads in the in-app browser, hidden, as text and layout only (ADR 0002), and the
+ * Core's script reports from it what to show, as soon as the page's document has been read: its main content, laid
+ * out like Feed Content, after which the page is dropped; or, if the site sent the reader to another page, e.g. its
+ * consent page, that page, loaded completely so that the reader can decide there, and checked every second until
+ * the Article is back; or, if the page holds no main content, a hint that offers to load the complete page.
+ * The page starts loading once it may [loadNow], and reports [onLoaded] once it no longer loads.
+ * A neighbouring page that met a consent page waits until it is [shown] and then loads again, as the reader may have
  * consented on another page meanwhile.
  */
 @Composable
-private fun ReaderViewPage(article: Article, shown: Boolean, revision: Int, actions: ArticleViewActions) {
+private fun ReaderViewPage(
+    article: Article,
+    shown: Boolean,
+    loadNow: Boolean,
+    onLoaded: () -> Unit,
+    revision: Int,
+    actions: ArticleViewActions,
+    onRendererGone: () -> Unit,
+) {
     val url by produceState<String?>(null, article.id) { value = actions.originalPageUrl(article) }
     val link = url ?: return Centered { CircularProgressIndicator() }
     var browser by remember(link) { mutableStateOf<WebView?>(null) }
-    var pagesLoaded by remember(link) { mutableIntStateOf(0) }
+    var pageChanges by remember(link) { mutableIntStateOf(0) }
     var report by remember(link) { mutableStateOf<String?>(null) }
     var state by remember(link) { mutableStateOf<ReaderView>(ReaderView.NotYet) }
+    // Read by the browser for each request, off the main thread.
+    val pageLoad = remember(link) { AtomicReference(PageLoad.TextAndLayout) }
     val isShown by rememberUpdatedState(shown)
+    fun loadCompletely(page: WebView) {
+        pageLoad.set(PageLoad.Complete)
+        state = ReaderView.NotYet
+        page.reload()
+    }
     Box(Modifier.fillMaxSize().keepPagerStill()) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context -> inAppBrowser(context, onPageFinished = { pagesLoaded++ }).apply { browser = this; loadUrl(link) } },
-        )
         when (val current = state) {
-            // Opaque, as the Article View's own background is transparent and the page lies beneath.
-            is ReaderView.Ready -> Surface(Modifier.fillMaxSize()) { ArticleWebView(article, current.document) }
-            ReaderView.NotYet -> Centered { CircularProgressIndicator() }
-            ReaderView.ConsentNeeded, ReaderView.Failed -> Unit // the page itself shows
+            // The page is no longer needed: dropping it ends its scripts, and with them its ads, and frees its memory.
+            is ReaderView.Ready -> ArticleWebView(article, current.document, onRendererGone)
+            else -> {
+                val loading = current == ReaderView.NotYet
+                val nothingFound = current == ReaderView.Failed && pageLoad.get() == PageLoad.TextAndLayout
+                AndroidView(
+                    // Hidden unless it is to be shown: a WebView draws over Compose content placed on top of it. It
+                    // stays visible to Android, so the page, and its consent manager, behave as on screen.
+                    modifier = Modifier.fillMaxSize().alpha(if (loading || nothingFound) 0f else 1f),
+                    factory = { context ->
+                        inAppBrowser(
+                            context,
+                            onRendererGone,
+                            onPageChanged = { pageChanges++ },
+                            letsThrough = { request ->
+                                pageLoad.get() == PageLoad.Complete ||
+                                    actions.readerViewLoads(request.isForMainFrame, request.requestHeaders["Accept"])
+                            },
+                        ).apply {
+                            settings.blockNetworkImage = true
+                            browser = this
+                        }
+                    },
+                    // Images load once the page shows; until then they would only slow it down.
+                    update = { it.settings.blockNetworkImage = loading },
+                    onRelease = { it.destroy() },
+                )
+                when {
+                    loading -> Centered { CircularProgressIndicator() }
+                    nothingFound -> NothingFound(onLoadCompletely = { browser?.let(::loadCompletely) })
+                }
+            }
         }
     }
-    // Each loaded page, e.g. the Article after a consent page, is checked again.
-    LaunchedEffect(browser, pagesLoaded) {
+    var started by remember(link) { mutableStateOf(false) }
+    LaunchedEffect(browser, loadNow) {
         val page = browser ?: return@LaunchedEffect
-        if (pagesLoaded == 0) return@LaunchedEffect
-        delay(READER_VIEW_SETTLE_MILLIS) // consent managers start after the page has loaded
+        if (loadNow && !started) {
+            started = true
+            page.loadUrl(link)
+        }
+    }
+    LaunchedEffect(state) { if (state != ReaderView.NotYet) onLoaded() }
+    // Each page the browser shows, e.g. the Article after a consent page, is checked again until its document is read.
+    LaunchedEffect(browser, pageChanges) {
+        val page = browser ?: return@LaunchedEffect
+        if (pageChanges == 0) return@LaunchedEffect
         var waited = 0L
-        while (true) {
+        while (state !is ReaderView.Ready) {
             val latest = page.evaluate(actions.readerViewScript).also { report = it }
-            val result = actions.readerView(article, latest)
+            val result = actions.readerView(article, link, pageLoad.get(), latest)
             state = if (result == ReaderView.NotYet && waited >= READER_VIEW_MAX_WAIT_MILLIS) ReaderView.Failed else result
             val pause = when (state) {
                 ReaderView.NotYet -> READER_VIEW_RETRY_MILLIS
-                ReaderView.ConsentNeeded -> {
+                ReaderView.ShowPage -> {
                     if (!isShown) {
                         snapshotFlow { isShown }.first { it }
                         page.reload()
+                        return@LaunchedEffect
+                    }
+                    // The reader decides on the page, e.g. a consent page, which needs its scripts for that.
+                    if (pageLoad.get() == PageLoad.TextAndLayout) {
+                        loadCompletely(page)
                         return@LaunchedEffect
                     }
                     READER_VIEW_CONSENT_RETRY_MILLIS
@@ -764,7 +863,19 @@ private fun ReaderViewPage(article: Article, shown: Boolean, revision: Int, acti
     // Feed Settings changes, e.g. Bonus Text, prepare the same main content again.
     LaunchedEffect(revision) {
         val latest = report ?: return@LaunchedEffect
-        if (state is ReaderView.Ready) state = actions.readerView(article, latest)
+        if (state is ReaderView.Ready) state = actions.readerView(article, link, pageLoad.get(), latest)
+    }
+}
+
+/**
+ * The page, loaded as text and layout only, holds no main content, e.g. as the site builds its articles with scripts.
+ * The reader sees that, rather than the page being loaded completely on its own, so that such Feeds can be fixed.
+ */
+@Composable
+private fun NothingFound(onLoadCompletely: () -> Unit) = Centered {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(stringResource(R.string.reader_view_nothing_found), textAlign = TextAlign.Center)
+        Button(onClick = onLoadCompletely) { Text(stringResource(R.string.reader_view_load_completely)) }
     }
 }
 
@@ -775,13 +886,20 @@ private suspend fun WebView.evaluate(script: String): String =
 /**
  * The in-app browser for Original Pages. JavaScript and DOM storage are on, as pages and their consent managers
  * need them; the cookies, and with them consents, are kept. Links stay in the browser; other schemes, e.g.
- * mailto:, go to other apps.
+ * mailto:, go to other apps. [onPageChanged]: a new page has become visible or has finished loading. Requests the
+ * browser [letsThrough] load; the others are refused.
  */
 @SuppressLint("SetJavaScriptEnabled")
-private fun inAppBrowser(context: Context, onPageFinished: () -> Unit = {}): WebView = WebView(context).apply {
+private fun inAppBrowser(
+    context: Context,
+    onRendererGone: () -> Unit,
+    onPageChanged: () -> Unit = {},
+    letsThrough: (WebResourceRequest) -> Boolean = { true },
+): WebView = WebView(context).apply {
     // Measured to an exact height. Otherwise the WebView takes 0 as its viewport height, and so does CSS `vh`:
     // consent walls sized to the screen collapse to nothing.
     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    scrollVerticallyFirst()
     settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
@@ -798,7 +916,56 @@ private fun inAppBrowser(context: Context, onPageFinished: () -> Unit = {}): Web
             return true
         }
 
-        override fun onPageFinished(view: WebView, url: String) = onPageFinished()
+        override fun onPageCommitVisible(view: WebView, url: String) = onPageChanged()
+
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+            if (letsThrough(request)) null else REFUSED
+
+        override fun onPageFinished(view: WebView, url: String) = onPageChanged()
+
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean = keepAppAlive(onRendererGone)
+    }
+}
+
+/**
+ * The WebViews' page renderer has crashed, or Android has ended it, e.g. for memory. Unhandled, that ends the whole
+ * app. All WebViews share the renderer, so each is replaced by [onRendererGone]; the old one is destroyed when it
+ * leaves the screen.
+ */
+private fun keepAppAlive(onRendererGone: () -> Unit): Boolean {
+    onRendererGone()
+    return true
+}
+
+/**
+ * Lets a drag that runs more up or down than sideways scroll the page to its end, instead of the pager taking it
+ * over as soon as the finger has drifted a little sideways. A drag that runs more sideways stays the pager's.
+ */
+@SuppressLint("ClickableViewAccessibility")
+private fun WebView.scrollVerticallyFirst() {
+    val slop = ViewConfiguration.get(context).scaledTouchSlop
+    var downX = 0f
+    var downY = 0f
+    var decided = false
+    setOnTouchListener { view, event ->
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x
+                downY = event.y
+                decided = false
+            }
+            MotionEvent.ACTION_MOVE -> if (!decided) {
+                val sideways = abs(event.x - downX)
+                val upOrDown = abs(event.y - downY)
+                if (upOrDown > slop / 2 && upOrDown > sideways) {
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                    decided = true
+                } else if (sideways > slop) {
+                    decided = true
+                }
+            }
+        }
+        false // the page handles the touch as usual
     }
 }
 
@@ -818,19 +985,24 @@ private class KeepPagerStillNode : Modifier.Node(), BringIntoViewModifierNode {
     override suspend fun bringIntoView(childCoordinates: LayoutCoordinates, boundsProvider: () -> ComposeRect?) = Unit
 }
 
-private const val READER_VIEW_SETTLE_MILLIS = 1500L
-private const val READER_VIEW_RETRY_MILLIS = 500L
+
+/** The answer to a request the in-app browser does not let through. */
+private val REFUSED: WebResourceResponse
+    get() = WebResourceResponse("text/plain", "utf-8", 403, "Refused", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+
+private const val READER_VIEW_RETRY_MILLIS = 250L
 private const val READER_VIEW_CONSENT_RETRY_MILLIS = 1000L
-private const val READER_VIEW_MAX_WAIT_MILLIS = 10_000L
+private const val READER_VIEW_MAX_WAIT_MILLIS = 15_000L
 
 /** One Article's document in a WebView. JavaScript stays off, zoom is disabled, and links open in the browser. */
 @Composable
-private fun ArticleWebView(article: Article, document: String) {
+private fun ArticleWebView(article: Article, document: String, onRendererGone: () -> Unit) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
             WebView(context).apply {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                scrollVerticallyFirst()
                 settings.apply {
                     javaScriptEnabled = false
                     setSupportZoom(false)
@@ -844,6 +1016,8 @@ private fun ArticleWebView(article: Article, document: String) {
                         view.context.openExternally(request.url)
                         return true
                     }
+
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean = keepAppAlive(onRendererGone)
                 }
             }
         },
@@ -854,5 +1028,6 @@ private fun ArticleWebView(article: Article, document: String) {
                 webView.loadDataWithBaseURL(article.url, document, "text/html", "utf-8", null)
             }
         },
+        onRelease = { it.destroy() },
     )
 }

@@ -270,18 +270,29 @@ class Core(
     fun prepareArticleView(article: Article): String =
         articleViewDocument(article, feedSettings(article.feedId), dateFormat)
 
+    /**
+     * Whether the in-app browser, loading an Original Page as [PageLoad.TextAndLayout] for the Reader View, lets a
+     * request through: the page itself, [isPageItself], and its stylesheets, by what the request [accept]s. Scripts,
+     * ads, trackers, images and fonts are not needed for the main content; see ADR 0002.
+     */
+    fun readerViewLoads(isPageItself: Boolean, accept: String?): Boolean =
+        isPageItself || accept?.startsWith("text/css") == true
+
     /** The script to run in a loaded Original Page; [readerView] reads its result. */
     val readerViewScript: String get() = READER_VIEW_SCRIPT
 
     /**
-     * The Reader View of [article], from [report]: the result of the Reader View script in its loaded Original
-     * Page, as `evaluateJavascript` returns it.
+     * The Reader View of [article], from [report]: the result of the Reader View script in the in-app browser,
+     * as `evaluateJavascript` returns it, after it was asked to load [pageUrl], the Article's Original Page, as
+     * [pageLoad]. Loaded as text and layout only, the page's scripts do not run, so neither does its consent manager.
      */
-    fun readerView(article: Article, report: String): ReaderView {
+    fun readerView(article: Article, pageUrl: String, pageLoad: PageLoad, report: String): ReaderView {
         val page = pageReport(report) ?: return ReaderView.Failed
-        page.tcf?.let { consentManager ->
+        if (page.loading) return ReaderView.NotYet
+        if (page.url != null && !isSamePage(page.url, pageUrl)) return ReaderView.ShowPage
+        if (pageLoad == PageLoad.Complete) page.tcf?.let { consentManager ->
             if (!consentManager.loaded) return ReaderView.NotYet
-            if (consentManager.displayStatus == "visible") return ReaderView.ConsentNeeded
+            if (consentManager.displayStatus == "visible") return ReaderView.ShowPage
         }
         val content = page.content ?: return ReaderView.Failed
         return ReaderView.Ready(articleViewDocument(article, feedSettings(article.feedId), dateFormat, content))
