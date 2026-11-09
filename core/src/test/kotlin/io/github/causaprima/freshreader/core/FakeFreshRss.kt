@@ -137,7 +137,7 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
             // Not part of FreshRSS: lets a manual check on the emulator add Articles and switch edit-tag failures.
             path == "/dev/add-article" -> {
                 val title = request.url.queryParameter("title") ?: "New Article"
-                addArticle(title, request.url.queryParameter("feed") ?: "Feed", published = System.currentTimeMillis() / 1000)
+                addArticle(title, request.url.queryParameter("feed") ?: "Feed", published = System.currentTimeMillis() / 1000, url = request.url.queryParameter("url"))
                 text(200, "added $title\n")
             }
             path == "/dev/edit-tag-status" -> {

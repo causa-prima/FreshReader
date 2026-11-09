@@ -10,6 +10,7 @@ import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
+import io.github.causaprima.freshreader.core.PageLoad
 import io.github.causaprima.freshreader.core.ReaderView
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
@@ -197,8 +198,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** The script to run in a loaded Original Page for the Reader View. */
     val readerViewScript: String get() = core.readerViewScript
 
-    /** What the Reader View shows of [article], from the script's [report] on its loaded Original Page. */
-    fun readerView(article: Article, report: String): ReaderView = core.readerView(article, report)
+    /** What the Reader View shows of [article], from the script's [report] on the page loaded from [pageUrl] as [pageLoad]. */
+    fun readerView(article: Article, pageUrl: String, pageLoad: PageLoad, report: String): ReaderView =
+        core.readerView(article, pageUrl, pageLoad, report)
+
+    /** Whether the Reader View, loading a page as text and layout only, lets a request through. */
+    fun readerViewLoads(isPageItself: Boolean, accept: String?): Boolean = core.readerViewLoads(isPageItself, accept)
 
     /** The link to [article]'s Original Page, tracking links unwrapped; null if the Feed gives none. */
     suspend fun originalPageUrl(article: Article): String? = core.originalPageUrl(article)
