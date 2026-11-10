@@ -1,0 +1,45 @@
+# Publishes a signed APK as a GitHub Release for every pushed version tag, e.g. v2026.11.10.0; see docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      - name: Test the Core
+        run: ./gradlew :core:test
+
+      - name: Build the signed APK
+        env:
+          RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
+          FRESHREADER_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$RELEASE_KEYSTORE" ] || [ -z "$FRESHREADER_KEYSTORE_PASSWORD" ]; then
+            echo "::error::The secrets RELEASE_KEYSTORE and RELEASE_KEYSTORE_PASSWORD are not set; see docs/releasing.md"
+            exit 1
+          fi
+          export FRESHREADER_KEYSTORE="$RUNNER_TEMP/release.p12"
+          echo "$RELEASE_KEYSTORE" | base64 --decode > "$FRESHREADER_KEYSTORE"
+          ./gradlew :app:assembleRelease -PreleaseTag="$GITHUB_REF_NAME"
+          rm "$FRESHREADER_KEYSTORE"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk="FreshReader-${GITHUB_REF_NAME#v}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk"
+          gh release create "$GITHUB_REF_NAME" "$apk" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

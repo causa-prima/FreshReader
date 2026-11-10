@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds: a name and icon background that tell them apart from a release on the same device. -->
+<resources>
+    <string name="app_name" translatable="false">FreshReader Debug</string>
+    <color name="ic_launcher_background">#455A64</color>
+</resources>
