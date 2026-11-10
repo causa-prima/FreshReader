@@ -13,7 +13,12 @@ fun main() {
         "Golem.de" to "News", "ComputerBase" to "News", "xkcd" to "Pictures", "Dinosaur Comics" to "Pictures",
         "Der Postillon" to "Leisure", "FreshRSS releases" to "Updates", "Stellenmarkt" to "Job",
     ).forEach { (feed, category) ->
-        server.addFeed(feed, category, icon = devFavicons[feed]?.let(::download), iconListed = feed != "Stellenmarkt")
+        server.addFeed(
+            feed, category,
+            icon = devFavicons[feed]?.let(::download),
+            iconListed = feed != "Stellenmarkt",
+            site = devSites[feed] ?: "https://example.org/",
+        )
     }
     val feeds = server.feeds.map { it.title }
     val start = System.currentTimeMillis() / 1000 - 3 * 24 * 3600
@@ -43,6 +48,9 @@ private val devFavicons = mapOf(
     "Der Postillon" to "https://www.der-postillon.com/favicon.ico",
     "FreshRSS releases" to "https://github.githubassets.com/favicons/favicon.svg",
 )
+
+/** The real sites of Feeds whose favicon the app may look for there, e.g. because the Server's is SVG. */
+private val devSites = mapOf("FreshRSS releases" to "https://github.com/FreshRSS/FreshRSS/releases")
 
 private fun download(url: String): ByteArray? = runCatching { java.net.URI(url).toURL().readBytes() }
     .onFailure { println("Could not load the favicon $url: $it") }

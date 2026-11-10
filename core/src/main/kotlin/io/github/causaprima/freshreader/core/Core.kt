@@ -95,8 +95,9 @@ class Core(
     private var unread: List<Article> = emptyList()
     private var categoryOfFeed: Map<String, String> = emptyMap()
     @Volatile
-    private var iconUrlOfFeed: Map<String, String> = emptyMap()
+    private var feedInfo: Map<String, GoogleReaderApi.FeedInfo> = emptyMap()
     private val favicons = Favicons(httpClient)
+    private val faviconFallbacks = FaviconFallbacks(httpClient, storeDir, clock)
     /** Ids of the snapshot's Articles that the reader has read since the last refresh. */
     private val readIds = mutableSetOf<String>()
 
@@ -179,7 +180,7 @@ class Core(
         val pending = outboxLock.withLock { outbox.toSet() }
         this.unread = unread.filterNot { it.id in pending }
         categoryOfFeed = feeds.mapValues { it.value.category }
-        iconUrlOfFeed = feeds.mapNotNull { (id, feed) -> feed.iconUrl?.let { id to it } }.toMap()
+        feedInfo = feeds
         readIds.clear()
         rebuildSections()
         return Outcome.Ok
@@ -267,10 +268,20 @@ class Core(
         sections = buildSections(unread.map { it.copy(read = it.id in readIds) }, categoryOfFeed, readingOrder)
     }
 
-    /** The favicon of [article]'s Feed as image bytes; null if the Feed has none of its own or it cannot be loaded. */
+    /**
+     * The favicon of [article]'s Feed as image bytes; null if the Feed has none of its own or it cannot be loaded.
+     * If the Server only has it as SVG, which Android cannot show, the Feed's site's other favicon stands in.
+     */
     suspend fun favicon(article: Article): ByteArray? {
-        val url = iconUrlOfFeed[article.feedId] ?: return null
-        return withContext(Dispatchers.IO) { favicons.load(url) }
+        val feed = feedInfo[article.feedId] ?: return null
+        val url = feed.iconUrl ?: return null
+        return withContext(Dispatchers.IO) {
+            when (val icon = favicons.load(url)) {
+                is ServerFavicon.Image -> icon.bytes.also { feed.site?.let(faviconFallbacks::drop) }
+                ServerFavicon.Svg -> feed.site?.let { faviconFallbacks.find(it) }
+                ServerFavicon.None -> null
+            }
+        }
     }
 
     /** How long ago [article] was published, short enough for a list entry: "5 min", "3 h", "2 d". */
