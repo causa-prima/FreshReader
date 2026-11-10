@@ -1,6 +1,6 @@
 # Releasing
 
-Every pushed version tag builds a signed APK and publishes it as a GitHub Release (`.github/workflows/release.yml`). Obtainium installs FreshReader from there and offers each newer release as an update.
+Every pushed version tag builds a signed APK and publishes it as a GitHub Release (`.github/workflows/release.yml`). The reader installs it from there by hand.
 
 ## Publishing a release
 
@@ -14,13 +14,13 @@ The tag is the version: the APK gets versionName `2026.11.10.0` and versionCode 
 
 The release notes list the pull requests merged since the previous tag; they can be edited on GitHub afterwards.
 
-## Obtainium
+## Installing an update
 
-Add the app with the repository URL `https://github.com/causa-prima/FreshReader`. Obtainium takes the release tag as the version and compares it with the installed app's versionName, which the build makes equal to it.
+Download `FreshReader-<version>.apk` from the release page on the phone and open it; Android installs it over the old version and keeps the login, the read marks not yet sent, the Reading Order, the Category Colours and the Feed Settings. The first time, Android asks to allow installing apps from the browser or file manager used. The version installed is shown under the app's info in the system settings.
 
 ## The signing key
 
-Android installs an update only if it is signed with the same key as the installed app. **If the key is lost, no further update can be installed**: the app has to be uninstalled and installed anew, which loses the login and the Feed Settings. Keep the backup.
+Android installs an update only if it is signed with the same key as the installed app. **If the key is lost, no further update can be installed**: the app has to be uninstalled and installed anew, which loses everything kept on the device: the login, the Reading Order, the Category Colours and the Feed Settings. Keep the backup.
 
 - The key lives in a PKCS12 keystore with the alias `freshreader`; the key has the keystore's password.
 - The reader keeps the keystore and its password in a backup outside this repository. `*.p12`, `*.jks` and `*.keystore` files are ignored by git.
