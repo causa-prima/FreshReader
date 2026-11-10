@@ -1,6 +1,7 @@
 package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
+import org.jsoup.Jsoup
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -11,6 +12,7 @@ import java.util.Locale
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ArticleViewTest {
     private val server = FakeFreshRss().start()
@@ -70,6 +72,21 @@ class ArticleViewTest {
         assertContains(view, "&lt;script&gt;alert(1)&lt;/script&gt; &amp; more")
         assertContains(view, "Fish &amp; &lt;i&gt;Chips&lt;/i&gt;")
         assertFalse("<script>" in view)
+    }
+
+    @Test
+    fun `title and Feed show the characters FreshRSS hands out as stand-ins, as text`() {
+        server.addFeed("Fish ＆ Chips", category = "News")
+        server.addArticle(
+            "＜b＞Tipp＜/b＞: ＆quot;Merz＆quot;", feedTitle = "Fish ＆ Chips",
+            published = 1_800_000_000, content = "<p>Text</p>",
+        )
+
+        val header = Jsoup.parse(onlyArticleView()).selectFirst("header")!!
+
+        assertEquals("<b>Tipp</b>: \"Merz\"", header.selectFirst("h1")!!.text())
+        assertTrue(header.select("h1 b").isEmpty())
+        assertTrue(header.selectFirst(".meta")!!.text().startsWith("Fish & Chips · "))
     }
 
     @Test

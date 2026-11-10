@@ -11,6 +11,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import org.jsoup.parser.Parser
 import java.io.IOException
 
 internal sealed interface ApiResult<out T> {
@@ -146,9 +147,9 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
     ) {
         fun toArticle() = Article(
             id = id,
-            title = title,
+            title = plainText(title),
             feedId = origin?.streamId.orEmpty(),
-            feedTitle = origin?.title.orEmpty(),
+            feedTitle = plainText(origin?.title.orEmpty(), FEED_NAME_STAND_INS),
             published = published,
             url = alternate.firstOrNull()?.href,
             content = summary?.content ?: content?.content.orEmpty(),
@@ -185,6 +186,20 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
     class FeedInfo(val category: String, val iconUrl: String?, val site: String?)
 
     companion object {
+        /**
+         * [text] as the reader should see it. FreshRSS hands out `&`, `<` and `>` as their fullwidth forms, in
+         * Feed names also [FEED_NAME_STAND_INS]; and HTML entities a Feed escaped itself (as Der Postillon does
+         * with quotes) stay in its titles.
+         */
+        private fun plainText(text: String, standIns: Map<Char, Char> = STAND_INS): String {
+            val restored = buildString(text.length) { text.forEach { append(standIns[it] ?: it) } }
+            return Parser.unescapeEntities(restored, false)
+        }
+
+        private val STAND_INS = mapOf('＆' to '&', '＜' to '<', '＞' to '>')
+        private val FEED_NAME_STAND_INS =
+            STAND_INS + mapOf('，' to ',', '／' to '/', '？' to '?', '＼' to '\\', '；' to ';')
+
         /** Accepts the FreshRSS root URL or its `/api/greader.php` URL; null if it is not an http(s) URL. */
         fun forServer(http: OkHttpClient, serverUrl: String): GoogleReaderApi? {
             val base = serverUrl.trim().trimEnd('/').let {
