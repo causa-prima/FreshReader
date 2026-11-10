@@ -29,15 +29,16 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
     /** [listed] = false: the Feed is missing from `subscription/list`, e.g. subscribed between two requests. */
     /**
      * [icon]: the favicon FreshRSS found for the Feed, or null if it found none and serves its default icon.
-     * [iconListed] = false: `subscription/list` gives no `iconUrl`.
+     * [iconListed] = false: `subscription/list` gives no `iconUrl`. [site]: the Feed's web site (`htmlUrl`).
      */
     class FakeFeed(
         val id: Long,
         val title: String,
         val category: String,
         val listed: Boolean = true,
-        val icon: ByteArray? = null,
+        var icon: ByteArray? = null,
         val iconListed: Boolean = true,
+        val site: String = "https://example.org/",
     )
 
     data class FakeArticle(
@@ -100,7 +101,8 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         listed: Boolean = true,
         icon: ByteArray? = null,
         iconListed: Boolean = true,
-    ): FakeFeed = FakeFeed(feeds.size + 1L, title, category, listed, icon, iconListed).also { feeds += it }
+        site: String = "https://example.org/",
+    ): FakeFeed = FakeFeed(feeds.size + 1L, title, category, listed, icon, iconListed, site).also { feeds += it }
 
     /** Adds an Article; a Feed not added before is created in the Category "Uncategorized". */
     fun addArticle(
@@ -206,7 +208,7 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                         }
                         putJsonObject("origin") {
                             put("streamId", "feed/${feedOf(a).id}")
-                            put("htmlUrl", "https://example.org/")
+                            put("htmlUrl", feedOf(a).site)
                             put("title", a.feedTitle)
                         }
                         putJsonObject("summary") { put("content", a.content) }
@@ -266,7 +268,7 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                             addJsonObject { put("id", "user/-/label/${f.category}"); put("label", f.category) }
                         }
                         put("url", "https://example.org/feed/${f.id}.xml")
-                        put("htmlUrl", "https://example.org/")
+                        put("htmlUrl", f.site)
                         // Like FreshRSS from its base_url; here from the host the client asked for.
                         val iconUrl = request.url.newBuilder().encodedPath("/f.php").query(null)
                             .addQueryParameter("h", "%08x".format(f.id)).build()
