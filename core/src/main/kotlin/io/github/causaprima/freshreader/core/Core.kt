@@ -56,6 +56,9 @@ sealed interface SyncStatus {
     data class Failed(val count: Int, val reason: Outcome) : SyncStatus
 }
 
+/** Whom FreshReader reads as: a user on a Server. */
+data class Account(val serverUrl: String, val username: String)
+
 /** One Category's part of the list snapshot. */
 data class Section(val category: String, val articles: List<Article>) {
     val unreadCount: Int get() = articles.count { !it.read }
@@ -129,13 +132,28 @@ class Core(
     /** Whether credentials from an earlier successful login are stored on the device. */
     val hasStoredCredentials: Boolean get() = credentialStore.load() != null
 
-    /** Logs in with the API password; on success the credentials are stored encrypted. */
+    /** The Server and user of the stored credentials, e.g. to offer them when changing the Server; null before a login. */
+    val account: Account? get() = credentialStore.load()?.let { Account(it.serverUrl, it.username) }
+
+    /**
+     * Logs in with the API password; on success the credentials are stored encrypted. Logging in to another
+     * Server or as another user drops the read marks not yet sent, which belong to the previous one; a failed
+     * login keeps the previous credentials.
+     */
     suspend fun logIn(serverUrl: String, username: String, apiPassword: String): Outcome {
         val candidate = GoogleReaderApi.forServer(http, serverUrl) ?: return Outcome.InvalidServerUrl
         val outcome = candidate.logIn(username, apiPassword)
         if (outcome == Outcome.Ok) {
+            val previous = account
             credentialStore.save(Credentials(serverUrl, username, apiPassword))
             api = candidate
+            if (previous != null && previous != Account(serverUrl, username)) {
+                outboxLock.withLock {
+                    outbox.clear()
+                    withContext(Dispatchers.IO) { outboxStore.save(outbox) }
+                    _syncStatus.value = SyncStatus.Synced
+                }
+            }
         }
         return outcome
     }

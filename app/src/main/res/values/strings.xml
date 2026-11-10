@@ -16,6 +16,10 @@
     <string name="list_empty">No unread Articles.</string>
     <string name="mark_all_as_read">Mark all as read</string>
     <string name="back">Back</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_server">Server</string>
+    <string name="settings_username">as %1$s</string>
+    <string name="change_server">Change Server</string>
     <string name="reading_order_title">Reading Order</string>
     <string name="reading_order_hint">Drag the Categories into the order you read them in. Categories added later appear at the end, alphabetically.</string>
     <string name="reading_order_drag">Move %1$s</string>

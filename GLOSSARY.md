@@ -8,6 +8,10 @@ An Android client for reading the articles aggregated by a single self-hosted Fr
 The reader's own FreshRSS instance; it subscribes to feeds, fetches them and holds all articles and their read state. FreshReader is only a client to it.
 _Avoid_: Backend, instance, account
 
+**Account**:
+The reader's user on a Server, identified by the Server's URL and the username; the read marks not yet sent belong to it.
+_Avoid_: Login, profile, user
+
 **Feed**:
 A subscribed source of articles, as configured on the Server.
 _Avoid_: Subscription, source, channel

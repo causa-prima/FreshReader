@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.causaprima.freshreader.core.Account
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.FeedSettings
@@ -28,7 +29,16 @@ import java.util.concurrent.ConcurrentHashMap
 
 sealed interface Screen {
     data object Loading : Screen
-    data class Login(val error: Outcome? = null, val busy: Boolean = false) : Screen
+    /**
+     * The login. [account]: the current Server and user, offered when changing them. [back]: the screen that going
+     * back returns to, unchanged; null on first start, when there is none.
+     */
+    data class Login(
+        val error: Outcome? = null,
+        val busy: Boolean = false,
+        val account: Account? = null,
+        val back: Screen? = null,
+    ) : Screen
     data class Failed(val outcome: Outcome) : Screen
     /**
      * The list snapshot. [focus]: id of the Article the list should bring into view, e.g. the last one shown
@@ -40,7 +50,8 @@ sealed interface Screen {
         val refreshing: Boolean = false,
         val refreshError: Outcome? = null,
     ) : Screen
-    data class ReadingOrder(val categories: List<String>) : Screen
+    /** The settings: the current [account] and the Reading Order of the [categories]. */
+    data class Settings(val account: Account?, val categories: List<String>) : Screen
     /**
      * The Article View, swipeable over the list snapshot's [articles]; [position] is the Article shown.
      * [feedSettings]: the Feed Settings sheet, while it is open. [revision] grows whenever Feed Settings
@@ -112,13 +123,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logIn(serverUrl: String, username: String, apiPassword: String) {
-        _screen.value = Screen.Login(busy = true)
+        val login = _screen.value as? Screen.Login ?: return
+        _screen.value = login.copy(error = null, busy = true)
         viewModelScope.launch {
             when (val outcome = withContext(Dispatchers.IO) { core.logIn(serverUrl, username, apiPassword) }) {
-                Outcome.Ok -> refresh()
-                else -> _screen.value = Screen.Login(error = outcome)
+                Outcome.Ok -> {
+                    favicons.clear() // another Server may use the same Feed ids for other Feeds
+                    _screen.value = Screen.Loading
+                    refresh()
+                }
+                else -> _screen.value = login.copy(error = outcome, busy = false)
             }
         }
+    }
+
+    /** Opens the login to change the Server or user, offering the current ones; going back changes nothing. */
+    fun changeServer() {
+        val current = _screen.value
+        viewModelScope.launch {
+            _screen.value = Screen.Login(account = withContext(Dispatchers.IO) { core.account }, back = current)
+        }
+    }
+
+    /** Leaves the login opened by [changeServer] without changing anything. */
+    fun cancelLogin() {
+        val login = _screen.value as? Screen.Login ?: return
+        if (login.busy) return
+        login.back?.let { _screen.value = it }
     }
 
     fun retry() {
@@ -149,7 +180,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             opening?.join()
             _screen.value = when (val outcome = withContext(Dispatchers.IO) { core.refresh() }) {
                 Outcome.Ok -> Screen.Articles(core.sections)
-                Outcome.WrongCredentials, Outcome.InvalidServerUrl -> Screen.Login(error = outcome)
+                Outcome.WrongCredentials, Outcome.InvalidServerUrl ->
+                    Screen.Login(error = outcome, account = withContext(Dispatchers.IO) { core.account })
                 is Outcome.Unreachable, is Outcome.ServerError ->
                     Screen.Articles(core.sections, refreshError = outcome)
             }
@@ -249,12 +281,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openReadingOrder() {
-        _screen.value = Screen.ReadingOrder(core.categories)
+    fun openSettings() {
+        viewModelScope.launch {
+            _screen.value = Screen.Settings(withContext(Dispatchers.IO) { core.account }, core.categories)
+        }
     }
 
     fun setReadingOrder(order: List<String>) {
-        _screen.value = Screen.ReadingOrder(order)
+        val settings = _screen.value as? Screen.Settings ?: return
+        _screen.value = settings.copy(categories = order)
         val previous = readingOrderChange
         readingOrderChange = viewModelScope.launch {
             previous?.join()
@@ -262,7 +297,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun closeReadingOrder() {
+    fun closeSettings() {
         viewModelScope.launch {
             readingOrderChange?.join()
             _screen.value = Screen.Articles(core.sections)
@@ -274,7 +309,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun refresh() {
         _screen.value = when (val outcome = withContext(Dispatchers.IO) { core.refresh() }) {
             Outcome.Ok -> Screen.Articles(core.sections)
-            Outcome.WrongCredentials, Outcome.InvalidServerUrl -> Screen.Login(error = outcome)
+            Outcome.WrongCredentials, Outcome.InvalidServerUrl ->
+                Screen.Login(error = outcome, account = withContext(Dispatchers.IO) { core.account })
             is Outcome.Unreachable, is Outcome.ServerError -> Screen.Failed(outcome)
         }
     }
