@@ -151,15 +151,15 @@ class MainActivity : ComponentActivity() {
                 val listState = rememberLazyListState()
                 when (val s = screen) {
                     Screen.Loading -> Centered { CircularProgressIndicator() }
-                    is Screen.Login -> LoginScreen(s, viewModel::logIn)
-                    is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry)
+                    is Screen.Login -> LoginScreen(s, viewModel::logIn, viewModel::cancelLogin)
+                    is Screen.Failed -> FailedScreen(s.outcome, viewModel::retry, viewModel::changeServer)
                     is Screen.Articles -> ArticleListScreen(
                         s, syncStatus, listState,
                         ListActions(
                             age = viewModel::age,
                             favicon = viewModel::favicon,
                             onOpenArticle = viewModel::openArticle,
-                            onOpenReadingOrder = viewModel::openReadingOrder,
+                            onOpenSettings = viewModel::openSettings,
                             onRefresh = viewModel::pullToRefresh,
                             onRefreshErrorShown = viewModel::dismissRefreshError,
                             onMarkAllAsRead = viewModel::markAllAsRead,
@@ -179,8 +179,8 @@ class MainActivity : ComponentActivity() {
                             onCloseFeedSettings = viewModel::closeFeedSettings,
                         ),
                     )
-                    is Screen.ReadingOrder -> ReadingOrderScreen(
-                        s.categories, viewModel::setReadingOrder, viewModel::closeReadingOrder,
+                    is Screen.Settings -> SettingsScreen(
+                        s, viewModel::setReadingOrder, viewModel::changeServer, viewModel::closeSettings,
                     )
                 }
             }
@@ -212,13 +212,27 @@ private fun outcomeMessage(outcome: Outcome): String = when (outcome) {
     is Outcome.ServerError -> stringResource(R.string.error_server, outcome.httpStatus)
 }
 
+/** The login; when it changes the Server or user ([Screen.Login.back]), going back leaves them as they were. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LoginScreen(state: Screen.Login, onLogIn: (String, String, String) -> Unit) {
-    var serverUrl by rememberSaveable { mutableStateOf("https://") }
-    var username by rememberSaveable { mutableStateOf("") }
+private fun LoginScreen(state: Screen.Login, onLogIn: (String, String, String) -> Unit, onCancel: () -> Unit) {
+    var serverUrl by rememberSaveable { mutableStateOf(state.account?.serverUrl ?: "https://") }
+    var username by rememberSaveable { mutableStateOf(state.account?.username.orEmpty()) }
     var apiPassword by rememberSaveable { mutableStateOf("") }
+    if (state.back != null) BackHandler(onBack = onCancel)
 
-    Scaffold { padding ->
+    Scaffold(
+        topBar = {
+            if (state.back != null) TopAppBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = onCancel, enabled = !state.busy) {
+                        Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
+                    }
+                },
+            )
+        },
+    ) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).imePadding().padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
@@ -258,11 +272,12 @@ private fun LoginScreen(state: Screen.Login, onLogIn: (String, String, String) -
 }
 
 @Composable
-private fun FailedScreen(outcome: Outcome, onRetry: () -> Unit) {
+private fun FailedScreen(outcome: Outcome, onRetry: () -> Unit, onChangeServer: () -> Unit) {
     Centered {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(outcomeMessage(outcome), color = MaterialTheme.colorScheme.error)
             Button(onClick = onRetry) { Text(stringResource(R.string.retry)) }
+            OutlinedButton(onClick = onChangeServer) { Text(stringResource(R.string.change_server)) }
         }
     }
 }
@@ -279,7 +294,7 @@ private class ListActions(
     val age: (Article) -> String,
     val favicon: suspend (Article) -> ImageBitmap?,
     val onOpenArticle: (Article) -> Unit,
-    val onOpenReadingOrder: () -> Unit,
+    val onOpenSettings: () -> Unit,
     val onRefresh: () -> Unit,
     val onRefreshErrorShown: () -> Unit,
     val onMarkAllAsRead: () -> Unit,
@@ -310,8 +325,8 @@ private fun ArticleListScreen(
                 title = { Text(stringResource(R.string.list_title, total)) },
                 actions = {
                     if (syncStatus is SyncStatus.Failed) SyncFailedHint(syncStatus)
-                    IconButton(onClick = actions.onOpenReadingOrder) {
-                        Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.reading_order_title))
+                    IconButton(onClick = actions.onOpenSettings) {
+                        Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings_title))
                     }
                 },
             )
@@ -474,12 +489,18 @@ private fun AgePill(age: String) {
 }
 
 /**
- * Settings screen for the Reading Order. The reader drags Categories by their handle; every drop is
- * stored at once, so the list follows the new order immediately.
+ * The settings: the Server, with a way to change it, and the Reading Order. The reader drags Categories by their
+ * handle; every drop is stored at once, so the list follows the new order immediately.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String>) -> Unit, onClose: () -> Unit) {
+private fun SettingsScreen(
+    settings: Screen.Settings,
+    onReorder: (List<String>) -> Unit,
+    onChangeServer: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val categories = settings.categories
     BackHandler(onBack = onClose)
     val haptics = LocalHapticFeedback.current
     // Follows the finger during a drag; handed to onReorder on drop.
@@ -497,7 +518,7 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.reading_order_title)) },
+                title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
@@ -507,7 +528,23 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), state = listState) {
+            item(key = "server") {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsHeading(stringResource(R.string.settings_server))
+                    settings.account?.let { account ->
+                        Text(account.serverUrl, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            stringResource(R.string.settings_username, account.username),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    OutlinedButton(onClick = onChangeServer) { Text(stringResource(R.string.change_server)) }
+                }
+                HorizontalDivider()
+            }
             item(key = "hint") {
+                SettingsHeading(stringResource(R.string.reading_order_title), Modifier.padding(start = 16.dp, top = 16.dp))
                 Text(
                     stringResource(R.string.reading_order_hint),
                     style = MaterialTheme.typography.bodyMedium,
@@ -541,6 +578,11 @@ private fun ReadingOrderScreen(categories: List<String>, onReorder: (List<String
             }
         }
     }
+}
+
+@Composable
+private fun SettingsHeading(text: String, modifier: Modifier = Modifier) {
+    Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = modifier)
 }
 
 /** What the reader can do in the Article View. */
