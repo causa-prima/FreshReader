@@ -90,6 +90,8 @@ class Core(
     private val sessionLock = Mutex()
     private val readingOrderStore = ReadingOrderStore(storeDir)
     private var readingOrder: List<String> = readingOrderStore.load()
+    private val categoryColourStore = CategoryColourStore(storeDir)
+    private var chosenCategoryColours: Map<String, CategoryColour> = categoryColourStore.load()
     private val feedSettingsStore = FeedSettingsStore(storeDir)
     private var feedSettings: Map<String, FeedSettings> = feedSettingsStore.load()
     private var unread: List<Article> = emptyList()
@@ -314,6 +316,25 @@ class Core(
         }
         val content = page.content ?: return ReaderView.Failed
         return ReaderView.Ready(articleViewDocument(article, feedSettings(article.feedId), dateFormat, content))
+    }
+
+    /**
+     * The Category Colour of [category]: the reader's choice, else one picked automatically that differs from its
+     * neighbours'. Counted over all [categories], also those without unread Articles, so that a Category keeps
+     * its colour when another one has nothing to read.
+     */
+    fun categoryColour(category: String): CategoryColour =
+        categoryColours(categories, chosenCategoryColours)[category]
+            ?: chosenCategoryColours[category] ?: CategoryColour.entries.first()
+
+    /** The Category Colour the reader chose for [category]; null if it is picked automatically. */
+    fun chosenCategoryColour(category: String): CategoryColour? = chosenCategoryColours[category]
+
+    /** Sets the Category Colour of [category], kept by its name; null lets it be picked automatically again. */
+    suspend fun setCategoryColour(category: String, colour: CategoryColour?) {
+        val colours = if (colour == null) chosenCategoryColours - category else chosenCategoryColours + (category to colour)
+        withContext(Dispatchers.IO) { categoryColourStore.save(colours) }
+        chosenCategoryColours = colours
     }
 
     /** Replaces the Reading Order: the reader's chosen sequence of Categories, by name. */

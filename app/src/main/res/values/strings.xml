@@ -23,6 +23,9 @@
     <string name="reading_order_title">Reading Order</string>
     <string name="reading_order_hint">Drag the Categories into the order you read them in. Categories added later appear at the end, alphabetically.</string>
     <string name="reading_order_drag">Move %1$s</string>
+    <string name="category_colour_choose">Colour of %1$s</string>
+    <string name="category_colour_title">Colour for %1$s</string>
+    <string name="category_colour_automatic">Automatic</string>
     <string name="more_options">More options</string>
     <string name="feed_settings_open">Settings for this Feed</string>
     <string name="feed_settings_title">Settings for %1$s</string>

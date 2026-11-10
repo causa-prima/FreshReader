@@ -28,6 +28,10 @@ _Avoid_: Group, folder, label, tag
 The reader's chosen sequence of Categories, in which their Articles are presented; Categories not in it follow alphabetically.
 _Avoid_: Sort order, priority, position
 
+**Category Colour**:
+A muted colour from a fixed palette that marks a Category's header in the list, so that the reader sees which Category they are in; chosen by the reader per Category, or else picked automatically to differ from its neighbours'.
+_Avoid_: Category tint, label colour, theme
+
 **Feed Settings**:
 The reader's per-Feed preferences, kept on the device rather than on the Server.
 _Avoid_: Feed config, feed options

@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.causaprima.freshreader.core.Account
 import io.github.causaprima.freshreader.core.Article
 import io.github.causaprima.freshreader.core.Core
+import io.github.causaprima.freshreader.core.CategoryColour
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.PageLoad
@@ -50,8 +51,16 @@ sealed interface Screen {
         val refreshing: Boolean = false,
         val refreshError: Outcome? = null,
     ) : Screen
-    /** The settings: the current [account] and the Reading Order of the [categories]. */
-    data class Settings(val account: Account?, val categories: List<String>) : Screen
+    /**
+     * The settings: the current [account] and the Reading Order of the [categories], with each one's Category
+     * Colour in [colours] and the colours the reader chose in [chosenColours]; the others are automatic.
+     */
+    data class Settings(
+        val account: Account?,
+        val categories: List<String>,
+        val colours: Map<String, CategoryColour> = emptyMap(),
+        val chosenColours: Map<String, CategoryColour> = emptyMap(),
+    ) : Screen
     /**
      * The Article View, swipeable over the list snapshot's [articles]; [position] is the Article shown.
      * [feedSettings]: the Feed Settings sheet, while it is open. [revision] grows whenever Feed Settings
@@ -110,8 +119,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** The read rule of the last opened Article, applied while the Article View is shown; applied in order. */
     private var opening: Job? = null
 
-    /** The last Reading Order change still being stored; changes are applied one after another. */
-    private var readingOrderChange: Job? = null
+    /** The last Reading Order or Category Colour change still being stored; applied one after another. */
+    private var settingsChange: Job? = null
 
     /** The last Feed Settings change still being stored; changes are applied one after another. */
     private var feedSettingsChange: Job? = null
@@ -280,23 +289,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openSettings() {
         viewModelScope.launch {
-            _screen.value = Screen.Settings(withContext(Dispatchers.IO) { core.account }, core.categories)
+            _screen.value = withColours(Screen.Settings(withContext(Dispatchers.IO) { core.account }, core.categories))
+        }
+    }
+
+    /** [settings] with the Category Colours as they are now; automatic ones follow the Reading Order. */
+    private fun withColours(settings: Screen.Settings) = settings.copy(
+        colours = settings.categories.associateWith(core::categoryColour),
+        chosenColours = settings.categories.mapNotNull { c -> core.chosenCategoryColour(c)?.let { c to it } }.toMap(),
+    )
+
+    /** Shows the settings again with the Category Colours as they are now, if they are still open. */
+    private fun showColours() {
+        val settings = _screen.value as? Screen.Settings ?: return
+        _screen.value = withColours(settings)
+    }
+
+    /** The Category Colour of [category] in the list. */
+    fun categoryColour(category: String): CategoryColour = core.categoryColour(category)
+
+    /** Chooses [category]'s Category Colour; null lets it be picked automatically. */
+    fun setCategoryColour(category: String, colour: CategoryColour?) {
+        val previous = settingsChange
+        settingsChange = viewModelScope.launch {
+            previous?.join()
+            core.setCategoryColour(category, colour)
+            showColours()
         }
     }
 
     fun setReadingOrder(order: List<String>) {
         val settings = _screen.value as? Screen.Settings ?: return
         _screen.value = settings.copy(categories = order)
-        val previous = readingOrderChange
-        readingOrderChange = viewModelScope.launch {
+        val previous = settingsChange
+        settingsChange = viewModelScope.launch {
             previous?.join()
             core.setReadingOrder(order)
+            showColours()
         }
     }
 
     fun closeSettings() {
         viewModelScope.launch {
-            readingOrderChange?.join()
+            settingsChange?.join()
             _screen.value = Screen.Articles(core.sections)
         }
     }

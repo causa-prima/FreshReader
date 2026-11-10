@@ -93,10 +93,11 @@ class ChangeServerTest {
         }
 
     @Test
-    fun `the Reading Order and Feed Settings stay when the Server changes`() = runBlocking<Unit> {
+    fun `the Reading Order, Category Colours and Feed Settings stay when the Server changes`() = runBlocking<Unit> {
         val feedId = core.articles.first().feedId
         core.setReadingOrder(listOf("Pictures", "News"))
         core.setFeedSettings(feedId, FeedSettings(viewMode = ViewMode.ReaderView, bonusText = true))
+        core.setCategoryColour("News", CategoryColour.Teal)
         newServer.addFeed("xkcd", category = "Pictures")
         newServer.addArticle("New comic", feedTitle = "xkcd", published = 1_800_000_300)
 
@@ -105,5 +106,6 @@ class ChangeServerTest {
 
         assertEquals(listOf("Pictures", "News"), core.sections.map { it.category })
         assertEquals(FeedSettings(viewMode = ViewMode.ReaderView, bonusText = true), core.feedSettings(feedId))
+        assertEquals(CategoryColour.Teal, core.categoryColour("News"))
     }
 }

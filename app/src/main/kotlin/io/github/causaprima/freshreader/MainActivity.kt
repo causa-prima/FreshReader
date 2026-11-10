@@ -120,6 +120,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
+import io.github.causaprima.freshreader.core.CategoryColour
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.PageLoad
@@ -163,6 +164,7 @@ class MainActivity : ComponentActivity() {
                         s, syncStatus, listState,
                         ListActions(
                             favicon = viewModel::favicon,
+                            categoryColour = viewModel::categoryColour,
                             onOpenArticle = viewModel::openArticle,
                             onOpenSettings = viewModel::openSettings,
                             onRefresh = viewModel::pullToRefresh,
@@ -185,7 +187,8 @@ class MainActivity : ComponentActivity() {
                         ),
                     )
                     is Screen.Settings -> SettingsScreen(
-                        s, viewModel::setReadingOrder, viewModel::changeServer, viewModel::closeSettings,
+                        s, viewModel::setReadingOrder, viewModel::setCategoryColour, viewModel::changeServer,
+                        viewModel::closeSettings,
                     )
                 }
             }
@@ -297,6 +300,7 @@ private const val DISABLED_ALPHA = 0.38f
 /** What the reader can do on the list screen. */
 private class ListActions(
     val favicon: suspend (Article) -> ImageBitmap?,
+    val categoryColour: (String) -> CategoryColour,
     val onOpenArticle: (Article) -> Unit,
     val onOpenSettings: () -> Unit,
     val onRefresh: () -> Unit,
@@ -351,7 +355,9 @@ private fun ArticleListScreen(
                     }
                 }
                 sections.forEach { section ->
-                    stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
+                    stickyHeader(key = "category:${section.category}") {
+                        SectionHeader(section, actions.categoryColour(section.category))
+                    }
                     items(section.articles, key = { it.id }) { article ->
                         ArticleEntry(article, last = article === section.articles.last(), actions)
                     }
@@ -416,20 +422,19 @@ private fun SyncFailedHint(status: SyncStatus.Failed) {
 }
 
 /**
- * A Category's name and unread count as a band across the screen. Below it a gap in the page's colour, so that
- * the first card keeps its distance even while the header is stuck to the top.
+ * A Category's name and unread count as a band across the screen, tinted with its Category Colour. Below it a
+ * gap in the page's colour, so that the first card keeps its distance even while the header is stuck to the top.
  */
 @Composable
-private fun SectionHeader(section: Section) {
+private fun SectionHeader(section: Section, colour: CategoryColour) {
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth().background(categoryBandColor(colour)).padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 section.category.uppercase(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f),
+                color = categoryTextColor(colour), modifier = Modifier.weight(1f),
             )
             Text(
                 section.unreadCount.toString(), style = MaterialTheme.typography.labelLarge,
@@ -506,17 +511,30 @@ private val FEED_ICON_SIZE = 24.dp
 
 /**
  * The settings: the Server, with a way to change it, and the Reading Order. The reader drags Categories by their
- * handle; every drop is stored at once, so the list follows the new order immediately.
+ * handle; every drop is stored at once, so the list follows the new order immediately. The dot before each
+ * Category shows its Category Colour and opens the palette.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsScreen(
     settings: Screen.Settings,
     onReorder: (List<String>) -> Unit,
+    onChooseColour: (String, CategoryColour?) -> Unit,
     onChangeServer: () -> Unit,
     onClose: () -> Unit,
 ) {
     val categories = settings.categories
+    var choosingColourOf by rememberSaveable { mutableStateOf<String?>(null) }
+    choosingColourOf?.let { category ->
+        CategoryColourPicker(
+            category, settings.chosenColours[category],
+            onChoose = { colour ->
+                onChooseColour(category, colour)
+                choosingColourOf = null
+            },
+            onDismiss = { choosingColourOf = null },
+        )
+    }
     BackHandler(onBack = onClose)
     val haptics = LocalHapticFeedback.current
     // Follows the finger during a drag; handed to onReorder on drop.
@@ -572,7 +590,10 @@ private fun SettingsScreen(
                 ReorderableItem(reorderState, key = category) { isDragging ->
                     val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp)
                     Surface(shadowElevation = elevation) {
-                        Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            settings.colours[category]?.let { colour ->
+                                CategoryColourDot(category, colour) { choosingColourOf = category }
+                            }
                             Text(category, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                             IconButton(
                                 onClick = {},
