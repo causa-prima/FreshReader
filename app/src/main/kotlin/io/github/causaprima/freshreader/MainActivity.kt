@@ -35,6 +35,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -75,6 +77,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -110,6 +113,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -283,7 +287,7 @@ private fun FailedScreen(outcome: Outcome, onRetry: () -> Unit, onChangeServer: 
 }
 
 /** Read Articles stay in the list until the next refresh, greyed out. */
-private const val READ_ALPHA = 0.45f
+internal const val READ_ALPHA = 0.45f
 
 /** Material's opacity for disabled content. */
 private const val DISABLED_ALPHA = 0.38f
@@ -338,6 +342,7 @@ private fun ArticleListScreen(
             onRefresh = actions.onRefresh,
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
+            val debug = isDebugBuild()
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 if (sections.isEmpty()) {
                     item(key = "empty") {
@@ -346,10 +351,16 @@ private fun ArticleListScreen(
                         }
                     }
                 }
-                sections.forEach { section ->
-                    stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
-                    items(section.articles, key = { it.id }) { article -> ArticleEntry(article, actions) }
+                sections.forEachIndexed { categoryIndex, section ->
+                    stickyHeader(key = "category:${section.category}") { PrototypeSectionHeader(section, categoryIndex) }
+                    items(section.articles, key = { it.id }) { article ->
+                        PrototypeArticleEntry(
+                            article, categoryIndex, isLast = article === section.articles.last(),
+                            actions.age(article), actions.favicon,
+                        ) { actions.onOpenArticle(article) }
+                    }
                 }
+                if (debug) item(key = "prototype-space") { Spacer(Modifier.height(72.dp)) }
                 if (total > 0) {
                     item(key = "mark-all") {
                         Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
@@ -358,6 +369,7 @@ private fun ArticleListScreen(
                     }
                 }
             }
+            ListLayoutSwitcher(Modifier.align(Alignment.BottomCenter))
         }
     }
 }
@@ -449,9 +461,9 @@ private fun ArticleEntry(article: Article, actions: ListActions) {
 
 /** The Feed's favicon; while it loads, or if there is none, the Feed's first letter in a coloured circle. */
 @Composable
-private fun FeedIcon(article: Article, favicon: suspend (Article) -> ImageBitmap?) {
+internal fun FeedIcon(article: Article, favicon: suspend (Article) -> ImageBitmap?, size: Dp = FEED_ICON_SIZE) {
     val icon by produceState<ImageBitmap?>(null, article.feedId) { value = favicon(article) }
-    val modifier = Modifier.size(FEED_ICON_SIZE)
+    val modifier = Modifier.size(size)
     val loaded = icon
     if (loaded != null) {
         Image(loaded, contentDescription = article.feedTitle, modifier, filterQuality = FilterQuality.Medium)
@@ -470,13 +482,13 @@ private fun FeedIcon(article: Article, favicon: suspend (Article) -> ImageBitmap
 }
 
 /** A colour that stays the same for a Feed and tells most Feeds apart. */
-private fun placeholderColour(feedTitle: String): Color =
+internal fun placeholderColour(feedTitle: String): Color =
     Color.hsv(hue = (feedTitle.hashCode().toUInt() % 360u).toFloat(), saturation = 0.55f, value = 0.65f)
 
 private val FEED_ICON_SIZE = 24.dp
 
 @Composable
-private fun AgePill(age: String) {
+internal fun AgePill(age: String) {
     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer) {
         Text(
             age,
