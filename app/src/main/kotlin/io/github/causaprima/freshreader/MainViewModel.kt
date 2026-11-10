@@ -204,9 +204,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** How long ago [article] was published: "5 min", "3 h", "2 d". */
-    fun age(article: Article): String = core.age(article)
-
     /** Decoded favicons by Feed id, so that scrolling does not decode them again. */
     private val favicons = ConcurrentHashMap<String, ImageBitmap>()
 

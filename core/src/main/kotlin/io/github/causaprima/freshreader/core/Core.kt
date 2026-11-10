@@ -74,8 +74,8 @@ class Core(
     /** Time zone and locale of the dates shown to the reader. */
     zone: ZoneId = ZoneId.systemDefault(),
     locale: Locale = Locale.getDefault(),
-    /** The time the Articles' ages are counted against. */
-    private val clock: Clock = Clock.systemUTC(),
+    /** The time that decides when a fallback favicon is looked at again. */
+    clock: Clock = Clock.systemUTC(),
     /** Wait before the first retry of read marks after a transient failure; doubles with each retry. */
     private val firstRetryDelay: Duration = 2.seconds,
 ) : AutoCloseable {
@@ -281,17 +281,6 @@ class Core(
                 ServerFavicon.Svg -> feed.site?.let { faviconFallbacks.find(it) }
                 ServerFavicon.None -> null
             }
-        }
-    }
-
-    /** How long ago [article] was published, short enough for a list entry: "5 min", "3 h", "2 d". */
-    fun age(article: Article): String {
-        // A publication date slightly in the future (clocks differ) counts as just now.
-        val minutes = (clock.instant().epochSecond - article.published).coerceAtLeast(0) / 60
-        return when {
-            minutes < 60 -> "$minutes min"
-            minutes < 24 * 60 -> "${minutes / 60} h"
-            else -> "${minutes / (24 * 60)} d"
         }
     }
 

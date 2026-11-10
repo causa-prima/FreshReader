@@ -12,8 +12,8 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** What a list entry shows besides its title: the Feed's favicon and the Article's age. */
-class FaviconAndAgeTest {
+/** What a list entry shows besides its title: the Feed's favicon. */
+class FaviconTest {
     private val server = FakeFreshRss().start()
 
     @TempDir
@@ -34,22 +34,6 @@ class FaviconAndAgeTest {
     }
 
     private fun article(title: String) = core.articles.single { it.title == title }
-
-    @Test
-    fun `the age counts minutes, then hours, then days, always rounded down`() {
-        listOf(
-            "just now" to 30L, "59 minutes" to 59 * 60L, "an hour" to 3600L,
-            "almost a day" to 24 * 3600L - 1, "a day" to 24 * 3600L, "three days" to 3 * 24 * 3600L + 7 * 3600,
-            "ahead of our clock" to -120L, // the Server's clock is a little ahead
-        ).forEach { (title, secondsAgo) -> server.addArticle(title, published = NOW.epochSecond - secondsAgo) }
-
-        logIn()
-
-        assertEquals(
-            listOf("0 min", "59 min", "1 h", "23 h", "1 d", "3 d", "0 min"),
-            listOf("just now", "59 minutes", "an hour", "almost a day", "a day", "three days", "ahead of our clock").map { core.age(article(it)) },
-        )
-    }
 
     @Test
     fun `an entry shows its Feed's favicon, as the Server delivers it`() = runBlocking<Unit> {
