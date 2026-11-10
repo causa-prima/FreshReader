@@ -30,11 +30,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -45,6 +48,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -90,6 +94,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -106,6 +111,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -156,7 +162,6 @@ class MainActivity : ComponentActivity() {
                     is Screen.Articles -> ArticleListScreen(
                         s, syncStatus, listState,
                         ListActions(
-                            age = viewModel::age,
                             favicon = viewModel::favicon,
                             onOpenArticle = viewModel::openArticle,
                             onOpenSettings = viewModel::openSettings,
@@ -291,7 +296,6 @@ private const val DISABLED_ALPHA = 0.38f
 
 /** What the reader can do on the list screen. */
 private class ListActions(
-    val age: (Article) -> String,
     val favicon: suspend (Article) -> ImageBitmap?,
     val onOpenArticle: (Article) -> Unit,
     val onOpenSettings: () -> Unit,
@@ -348,7 +352,9 @@ private fun ArticleListScreen(
                 }
                 sections.forEach { section ->
                     stickyHeader(key = "category:${section.category}") { SectionHeader(section) }
-                    items(section.articles, key = { it.id }) { article -> ArticleEntry(article, actions) }
+                    items(section.articles, key = { it.id }) { article ->
+                        ArticleEntry(article, last = article === section.articles.last(), actions)
+                    }
                 }
                 if (total > 0) {
                     item(key = "mark-all") {
@@ -409,43 +415,66 @@ private fun SyncFailedHint(status: SyncStatus.Failed) {
     }
 }
 
+/**
+ * A Category's name and unread count as a band across the screen. Below it a gap in the page's colour, so that
+ * the first card keeps its distance even while the header is stuck to the top.
+ */
 @Composable
 private fun SectionHeader(section: Section) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                section.category, style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f),
+                section.category.uppercase(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f),
             )
             Text(
                 section.unreadCount.toString(), style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        Spacer(Modifier.fillMaxWidth().height(CARD_GAP).background(MaterialTheme.colorScheme.surface))
     }
 }
 
+/**
+ * An Article as a card: the Feed's favicon and the whole title. Cards are [CARD_GAP] apart; the [last] one of a
+ * Category keeps half again as much to the next header, as much as the header keeps to its first card.
+ */
 @Composable
-private fun ArticleEntry(article: Article, actions: ListActions) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clickable { actions.onOpenArticle(article) }
-            .alpha(if (article.read) READ_ALPHA else 1f)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun ArticleEntry(article: Article, last: Boolean, actions: ListActions) {
+    Box(
+        Modifier.fillMaxWidth().padding(
+            start = CARD_MARGIN, end = CARD_MARGIN,
+            top = CARD_GAP / 2, bottom = if (last) CARD_GAP * 1.5f else CARD_GAP / 2,
+        ),
     ) {
-        FeedIcon(article, actions.favicon)
-        Text(
-            article.title,
-            Modifier.weight(1f).padding(horizontal = 12.dp),
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        AgePill(actions.age(article))
+        // Not a Surface with onClick: that would stretch short cards to the minimum touch height, and the gaps
+        // between cards would differ.
+        Row(
+            Modifier.fillMaxWidth()
+                .alpha(if (article.read) READ_ALPHA else 1f)
+                .clip(CARD_SHAPE).background(MaterialTheme.colorScheme.surfaceContainer)
+                .clickable { actions.onOpenArticle(article) }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FeedIcon(article, actions.favicon)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                article.title, Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
-    HorizontalDivider()
 }
+
+private val CARD_GAP = 6.dp
+private val CARD_MARGIN = 4.dp
+private val CARD_SHAPE = RoundedCornerShape(8.dp)
 
 /** The Feed's favicon; while it loads, or if there is none, the Feed's first letter in a coloured circle. */
 @Composable
@@ -474,19 +503,6 @@ private fun placeholderColour(feedTitle: String): Color =
     Color.hsv(hue = (feedTitle.hashCode().toUInt() % 360u).toFloat(), saturation = 0.55f, value = 0.65f)
 
 private val FEED_ICON_SIZE = 24.dp
-
-@Composable
-private fun AgePill(age: String) {
-    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer) {
-        Text(
-            age,
-            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            maxLines = 1,
-        )
-    }
-}
 
 /**
  * The settings: the Server, with a way to change it, and the Reading Order. The reader drags Categories by their
