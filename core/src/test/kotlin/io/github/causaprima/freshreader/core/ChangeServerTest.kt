@@ -75,6 +75,17 @@ class ChangeServerTest {
     }
 
     @Test
+    fun `logging in again to the same Server as the same user keeps the read marks not yet sent, and sends them`() =
+        runBlocking<Unit> {
+            assertEquals(Outcome.Ok, core.logIn(oldServer.url, "reader", "api-secret"))
+
+            assertEquals(SyncStatus.Pending(2), core.syncStatus.value)
+            oldServer.editTagStatus = null
+            core.awaitSynced()
+            assertEquals(setOf("Old 1", "Old 2"), oldServer.markedRead.toSet())
+        }
+
+    @Test
     fun `the current Server and user are offered for changing them, and a failed change keeps them`() =
         runBlocking<Unit> {
             assertEquals(Account(oldServer.url, "reader"), core.account)

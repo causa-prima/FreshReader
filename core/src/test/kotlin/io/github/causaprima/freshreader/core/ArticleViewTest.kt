@@ -34,7 +34,10 @@ class ArticleViewTest {
     }
 
     @AfterEach
-    fun stopServer() = server.close()
+    fun tearDown() {
+        core.close()
+        server.close()
+    }
 
     private fun onlyArticleView(): String = runBlocking {
         assertEquals(Outcome.Ok, core.refresh())

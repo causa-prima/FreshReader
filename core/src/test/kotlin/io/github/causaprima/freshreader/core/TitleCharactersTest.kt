@@ -28,7 +28,10 @@ class TitleCharactersTest {
     }
 
     @AfterEach
-    fun stopServer() = server.close()
+    fun tearDown() {
+        core.close()
+        server.close()
+    }
 
     @Test
     fun `Article titles reach the list with the characters their entities and fullwidth stand-ins stand for`() =

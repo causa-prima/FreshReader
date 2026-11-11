@@ -6,11 +6,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
-import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
-import java.time.ZoneOffset
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -197,11 +194,4 @@ class FaviconFallbackTest {
         val ICO = byteArrayOf(0, 0, 1, 0, 1)
         val OTHER_PNG = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 2)
     }
-}
-
-/** A clock the test moves forward. */
-class MutableClock(var now: Instant) : Clock() {
-    override fun instant(): Instant = now
-    override fun getZone(): ZoneId = ZoneOffset.UTC
-    override fun withZone(zone: ZoneId): Clock = this
 }

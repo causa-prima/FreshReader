@@ -2,9 +2,6 @@ package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
-import org.jsoup.nodes.TextNode
-import org.jsoup.select.NodeTraversor
-import org.jsoup.select.NodeVisitor
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -81,6 +78,22 @@ class FeedSettingsTest {
         }
 
     @Test
+    fun `with Bonus Text on, an image with an empty title gets no Bonus Text, not even its alt text`() =
+        runBlocking<Unit> {
+            server.addFeed("Comics", category = "Pictures")
+            server.addArticle(
+                "Untitled", feedTitle = "Comics", published = 1_793_595_600,
+                content = """<p><img src="https://example.org/comic.png" title="" alt="A comic"></p><p>The end.</p>""",
+            )
+            assertEquals(Outcome.Ok, core.refresh())
+            val untitled = article("Untitled")
+
+            core.setFeedSettings(untitled.feedId, FeedSettings(bonusText = true))
+
+            assertEquals("The end.", textAfter(core.prepareArticleView(untitled), "img").trim())
+        }
+
+    @Test
     fun `Bonus Text is off by default`() = runBlocking<Unit> {
         val elevators = addXkcd()
         val comic = addDinosaurComics()
@@ -123,25 +136,6 @@ class FeedSettingsTest {
         const val DINOSAUR_TITLE_TEXT = "he gets around on a tricked-out horse he calls \"the Holmesmobile\""
         const val DINOSAUR_MAIL_SUBJECT = "\"deduce\" truly is the perfect verb, capable of doing anything. i've deduced this just now"
     }
-}
-
-/** Feed Content captured from a real Feed, in `src/test/resources/fixtures`. */
-fun fixture(name: String): String =
-    checkNotNull(FeedSettingsTest::class.java.getResource("/fixtures/$name")) { "no fixture $name" }.readText()
-
-/** What the reader sees of [document] as text, whitespace collapsed; attributes such as `title` are not visible. */
-fun visibleText(document: String): String = Jsoup.parse(document).body().text()
-
-/** The visible text that comes after the first element matching [cssQuery], in reading order. */
-fun textAfter(document: String, cssQuery: String): String {
-    val body = Jsoup.parse(document).body()
-    val start = checkNotNull(body.selectFirst(cssQuery)) { "no $cssQuery in the document" }
-    val text = StringBuilder()
-    var passed = false
-    NodeTraversor.traverse(NodeVisitor { node, _ ->
-        if (node === start) passed = true else if (passed && node is TextNode) text.append(node.text())
-    }, body)
-    return text.toString().replace(Regex("\\s+"), " ")
 }
 
 private fun String.occurrences(part: String): Int = windowed(part.length).count { it == part }

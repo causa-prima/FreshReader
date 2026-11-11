@@ -216,7 +216,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Decoded favicons by Feed id, so that scrolling does not decode them again. */
     private val favicons = ConcurrentHashMap<String, ImageBitmap>()
 
-    /** The favicon of [article]'s Feed, small enough for a list entry; null if there is none or it cannot be shown. */
+    /** The favicon of [article]'s Feed, small enough for an Article's card in the list; null if there is none or it cannot be shown. */
     suspend fun favicon(article: Article): ImageBitmap? {
         favicons[article.feedId]?.let { return it }
         val bytes = core.favicon(article) ?: return null

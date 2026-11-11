@@ -24,7 +24,10 @@ class ReadingOrderTest {
     }
 
     @AfterEach
-    fun stopServer() = server.close()
+    fun tearDown() {
+        core.close()
+        server.close()
+    }
 
     /** One unread Article in each of the reader's five Categories. */
     private fun addDailyCategories() {
@@ -62,10 +65,11 @@ class ReadingOrderTest {
         addDailyCategories()
         core.setReadingOrder(listOf("News", "Updates", "Job", "Pictures", "Leisure"))
 
-        val restarted = Core(storeDir = storeDir, secretBox = secretBox)
-        assertEquals(Outcome.Ok, restarted.refresh())
+        Core(storeDir = storeDir, secretBox = secretBox).use { restarted ->
+            assertEquals(Outcome.Ok, restarted.refresh())
 
-        assertEquals(listOf("News", "Updates", "Job", "Pictures", "Leisure"), restarted.sections.map { it.category })
+            assertEquals(listOf("News", "Updates", "Job", "Pictures", "Leisure"), restarted.sections.map { it.category })
+        }
     }
 
     @Test
