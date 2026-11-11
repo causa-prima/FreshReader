@@ -61,6 +61,19 @@ class FaviconTest {
             assertNull(core.favicon(article("From Der Postillon")), "the favicon cannot be loaded")
         }
 
+    @Test
+    fun `a favicon that could not be loaded is loaded the next time it is needed`() = runBlocking<Unit> {
+        server.addFeed("xkcd.com", category = "Pictures", icon = XKCD_ICON)
+        server.addArticle("Elevators", feedTitle = "xkcd.com", published = NOW.epochSecond)
+        logIn()
+        server.reachable = false
+        assertNull(core.favicon(article("Elevators")))
+
+        server.reachable = true
+
+        assertContentEquals(XKCD_ICON, core.favicon(article("Elevators")))
+    }
+
     private companion object {
         val NOW: Instant = Instant.parse("2026-11-06T12:00:00Z")
         val XKCD_ICON = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 1, 2, 3)

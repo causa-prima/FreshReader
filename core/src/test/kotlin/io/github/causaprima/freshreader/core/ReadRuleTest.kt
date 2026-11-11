@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import kotlin.test.assertEquals
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
@@ -69,10 +71,13 @@ class ReadRuleTest : LoggedInCoreTest() {
         assertEquals(2, server.editTagRequests)
     }
 
-    @Test
-    fun `an unavailable Server is retried without any visible interruption`() = runBlocking<Unit> {
+    @ParameterizedTest(name = "HTTP {0}")
+    @ValueSource(ints = [500, 503, 408, 429])
+    fun `a Server that fails internally, is unavailable, times out or is overloaded is retried without any visible interruption`(
+        status: Int,
+    ) = runBlocking<Unit> {
         addNewsAndPictures()
-        server.editTagStatus = 503
+        server.editTagStatus = status
 
         core.openArticle(core.articles[1])
         withTimeout(5.seconds) { while (server.editTagRequests < 3) delay(5) }
@@ -197,5 +202,46 @@ class ReadRuleTest : LoggedInCoreTest() {
         core.openArticle(core.articles[0])
 
         assertEquals(listOf(1, 2), withTimeout(5.seconds) { withRead.await() }.map { it.unreadCount })
+    }
+
+    @Test
+    fun `read marks the Server has taken are not pending again after a restart`() = runBlocking<Unit> {
+        addNewsAndPictures()
+        core.openArticle(core.articles[1])
+        core.awaitSynced()
+
+        restart()
+
+        assertEquals(SyncStatus.Synced, core.syncStatus.value)
+    }
+
+    @Test
+    fun `read marks pending at a restart fail visibly if the Server no longer takes the stored API password`() =
+        runBlocking<Unit> {
+            addNewsAndPictures()
+            server.reachable = false
+            core.openArticle(core.articles[1])
+            core.close() // the app is killed
+            server.reachable = true
+            server.apiPassword = "changed on the Server"
+
+            core = newCore()
+            assertEquals(Outcome.WrongCredentials, core.refresh())
+
+            assertEquals(SyncStatus.Failed(2, Outcome.WrongCredentials), core.awaitSyncStatus { it is SyncStatus.Failed })
+            assertEquals(emptyList(), server.markedRead)
+        }
+
+    @Test
+    fun `an Article read here and marked unread again elsewhere is unread again after a refresh`() = runBlocking<Unit> {
+        addNewsAndPictures()
+        core.openArticle(core.articles[0])
+        core.awaitSynced()
+        server.unreadElsewhere("News 1")
+
+        assertEquals(Outcome.Ok, core.refresh())
+
+        assertEquals("News 1", core.articles.first().title)
+        assertEquals(emptyList(), readTitles())
     }
 }

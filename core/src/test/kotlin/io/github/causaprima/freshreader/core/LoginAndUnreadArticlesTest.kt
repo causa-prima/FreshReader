@@ -137,4 +137,11 @@ class LoginAndUnreadArticlesTest {
 
     private fun ByteArray.isIn(haystack: ByteArray) =
         (0..haystack.size - size).any { i -> indices.all { haystack[i + it] == this[it] } }
+
+    @Test
+    fun `a user name FreshRSS would not accept is reported as wrong credentials`() = runBlocking<Unit> {
+        val core = core()
+        assertEquals(Outcome.WrongCredentials, core.logIn(server.url, "the reader", "api-secret"))
+        assertFalse(core.hasStoredCredentials)
+    }
 }

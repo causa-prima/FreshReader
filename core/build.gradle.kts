@@ -3,6 +3,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kover)
+    alias(libs.plugins.pitest)
 }
 
 java {
@@ -36,4 +38,14 @@ tasks.register<JavaExec>("runFakeServer") {
     description = "Runs the fake FreshRSS Server on port 8085 for manual checks on the emulator."
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "io.github.causaprima.freshreader.core.DevServerKt"
+}
+
+pitest {
+    pitestVersion = "1.30.2"
+    junit5PluginVersion = "1.2.3"
+    targetClasses = setOf("io.github.causaprima.freshreader.core.*")
+    excludedClasses = setOf("io.github.causaprima.freshreader.core.DevServerKt")
+    threads = 4
+    timestampedReports = false
+    outputFormats = setOf("HTML", "XML")
 }

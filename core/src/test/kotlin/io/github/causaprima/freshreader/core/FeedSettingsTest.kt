@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /** Feed Settings and the Bonus Text, checked against Feed Content captured from the real Feeds. */
 class FeedSettingsTest : LoggedInCoreTest() {
@@ -69,6 +70,21 @@ class FeedSettingsTest : LoggedInCoreTest() {
 
             assertEquals("The end.", textAfter(core.prepareArticleView(untitled), "img").trim())
         }
+
+    @Test
+    fun `with Bonus Text on, a mail link without a subject adds nothing`() = runBlocking<Unit> {
+        server.addFeed("Comics", category = "Pictures")
+        server.addArticle(
+            "Contact", feedTitle = "Comics", published = 1_793_595_600,
+            content = """<p>The end.</p><p><a href="mailto:comics@example.org">Write to us</a></p>""",
+        )
+        assertEquals(Outcome.Ok, core.refresh())
+        val contact = article("Contact")
+
+        core.setFeedSettings(contact.feedId, FeedSettings(bonusText = true))
+
+        assertTrue(visibleText(core.prepareArticleView(contact)).endsWith("The end. Write to us"))
+    }
 
     @Test
     fun `Bonus Text is off by default`() = runBlocking<Unit> {

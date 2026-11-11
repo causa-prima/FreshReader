@@ -126,6 +126,11 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         articles.replaceAll { if (it.title == title) it.copy(read = true) else it }
     }
 
+    /** Marks the Article [title] unread again on the Server itself, e.g. in FreshRSS's web interface. */
+    fun unreadElsewhere(title: String) = synchronized(articles) {
+        articles.replaceAll { if (it.title == title) it.copy(read = false) else it }
+    }
+
     private fun feedOf(article: FakeArticle) = feeds.first { it.title == article.feedTitle }
 
     /**
@@ -177,6 +182,8 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
     private fun clientLogin(request: RecordedRequest): MockResponse {
         val form = formFields(request).toMap()
         if (request.method != "POST") return text(400, "Bad Request!")
+        // Like FreshRSS: a user name it would not accept for an account is a bad request, not a wrong login.
+        if (!USERNAME_PATTERN.matches(form["Email"].orEmpty())) return text(400, "Bad Request!")
         if (form["Email"] != username || form["Passwd"] != apiPassword) return text(401, "Unauthorized!")
         return text(200, "SID=$authToken\nLSID=null\nAuth=$authToken\n")
     }
@@ -300,6 +307,9 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         .body(body)
         .build()
 }
+
+/** FreshRSS's `USERNAME_PATTERN` (app/Controllers/userController.php). */
+private val USERNAME_PATTERN = Regex("""[0-9a-zA-Z_][0-9a-zA-Z_.@\-]{1,38}|[0-9a-zA-Z]""")
 
 /** Stands in for FreshRSS's `default_favicon.ico`. */
 private val DEFAULT_FAVICON = "default favicon".toByteArray()

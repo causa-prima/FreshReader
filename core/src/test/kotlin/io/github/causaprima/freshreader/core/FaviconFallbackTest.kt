@@ -174,6 +174,33 @@ class FaviconFallbackTest {
         assertNull(favicon(), "the fallback is gone, and the site cannot be asked for a new one")
     }
 
+    @Test
+    fun `a site that cannot be reached when its fallback is first needed is asked again the next time`() =
+        runBlocking<Unit> {
+            githubLike()
+            site.reachable = false
+            start()
+            assertNull(favicon())
+
+            site.reachable = true
+
+            assertContentEquals(PNG, favicon())
+        }
+
+    @Test
+    fun `after a month a fallback the site only dates is checked again conditionally too`() = runBlocking<Unit> {
+        githubLike()
+        site.file("/favicons/favicon.png", PNG, "image/png", datedOnly = true)
+        start()
+        favicon()
+        site.responses.clear()
+
+        monthLater()
+
+        assertContentEquals(PNG, favicon())
+        assertEquals(listOf("/favicons/favicon.png" to 304), site.responses)
+    }
+
     private fun monthLater() {
         clock.now = clock.now.plus(Duration.ofDays(31))
         start()
