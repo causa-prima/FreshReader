@@ -1,11 +1,7 @@
 package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertEquals
 
 /**
@@ -13,26 +9,7 @@ import kotlin.test.assertEquals
  * (＆, ＜, ＞), in Feed names also `,`, `/`, `?`, `\` and `;`. Titles a Feed escaped itself, as Der Postillon
  * does, arrive with their entities.
  */
-class TitleCharactersTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = TestSecretBox())
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
-
+class TitleCharactersTest : LoggedInCoreTest() {
     @Test
     fun `Article titles reach the list with the characters their entities and fullwidth stand-ins stand for`() =
         runBlocking<Unit> {

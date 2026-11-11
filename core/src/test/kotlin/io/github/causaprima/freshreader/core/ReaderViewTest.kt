@@ -7,11 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.jsoup.Jsoup
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -20,26 +16,7 @@ import kotlin.test.assertIs
  * The Reader View: the Core's script runs in the loaded Original Page and reports what it found there; the
  * Core turns that report into what the Article View shows.
  */
-class ReaderViewTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = TestSecretBox())
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
-
+class ReaderViewTest : LoggedInCoreTest() {
     private fun addArticle(title: String, feed: String): Article = runBlocking {
         server.addFeed(feed, category = "News")
         server.addArticle(title, feedTitle = feed, published = 1_793_595_600, url = "https://example.org/$title", content = "<p>The Feed's teaser.</p>")

@@ -2,11 +2,7 @@ package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import java.time.ZoneId
 import java.util.Locale
 import kotlin.test.assertContains
@@ -14,30 +10,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-class ArticleViewTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(
-            storeDir = storeDir,
-            secretBox = TestSecretBox(),
-            zone = ZoneId.of("Europe/Berlin"),
-            locale = Locale.GERMANY,
-        )
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
+class ArticleViewTest : LoggedInCoreTest() {
+    override fun newCore() =
+        Core(storeDir = storeDir, secretBox = secretBox, zone = ZoneId.of("Europe/Berlin"), locale = Locale.GERMANY)
 
     private fun onlyArticleView(): String = runBlocking {
         assertEquals(Outcome.Ok, core.refresh())

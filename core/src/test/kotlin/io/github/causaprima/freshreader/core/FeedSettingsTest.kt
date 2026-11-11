@@ -2,37 +2,13 @@ package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
 /** Feed Settings and the Bonus Text, checked against Feed Content captured from the real Feeds. */
-class FeedSettingsTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private val secretBox = TestSecretBox()
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = secretBox)
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
-
+class FeedSettingsTest : LoggedInCoreTest() {
     private fun article(title: String): Article = core.articles.single { it.title == title }
 
     /** xkcd 3319 "Elevators", as the xkcd Feed delivers it: title and alt text are identical. */
@@ -121,8 +97,7 @@ class FeedSettingsTest {
         val comic = addDinosaurComics()
         core.setFeedSettings(elevators.feedId, FeedSettings(bonusText = true))
 
-        core.close() // the app is killed
-        core = Core(storeDir = storeDir, secretBox = secretBox)
+        restart()
         assertEquals(Outcome.Ok, core.refresh())
 
         assertEquals(FeedSettings(bonusText = true), core.feedSettings(elevators.feedId))
