@@ -2,32 +2,17 @@ package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertEquals
 
 /** The link to an Article's Original Page, as used for showing, opening and sharing it. */
-class OriginalPageTest {
-    private val server = FakeFreshRss().start()
+class OriginalPageTest : LoggedInCoreTest() {
     private val followIt = FakeFollowIt().start()
 
-    @TempDir
-    lateinit var storeDir: File
-
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = TestSecretBox(), httpClient = followIt.client())
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
+    override fun newCore() = Core(storeDir = storeDir, secretBox = secretBox, httpClient = followIt.client())
 
     @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
+    fun closeFollowIt() {
         followIt.close()
     }
 
@@ -85,8 +70,7 @@ class OriginalPageTest {
         assertEquals(ViewMode.FeedContent, core.feedSettings(article.feedId).viewMode)
 
         core.setFeedSettings(article.feedId, FeedSettings(viewMode = ViewMode.OriginalPage))
-        core.close() // the app is killed
-        core = Core(storeDir = storeDir, secretBox = TestSecretBox(), httpClient = followIt.client())
+        restart()
 
         assertEquals(ViewMode.OriginalPage, core.feedSettings(article.feedId).viewMode)
     }

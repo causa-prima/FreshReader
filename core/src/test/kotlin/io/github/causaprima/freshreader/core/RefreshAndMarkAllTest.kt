@@ -1,33 +1,17 @@
 package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.milliseconds
 
-class RefreshAndMarkAllTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private lateinit var core: Core
+class RefreshAndMarkAllTest : LoggedInCoreTest() {
+    override fun newCore() = Core(storeDir = storeDir, secretBox = secretBox, firstRetryDelay = 10.milliseconds)
 
     @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = TestSecretBox(), firstRetryDelay = 10.milliseconds)
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
+    fun subscribeToGolem() {
         server.addFeed("Golem.de", category = "News")
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
     }
 
     private fun addNews(title: String, published: Long) = server.addArticle(title, feedTitle = "Golem.de", published = published)

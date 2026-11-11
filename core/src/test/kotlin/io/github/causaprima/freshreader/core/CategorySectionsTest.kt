@@ -1,33 +1,10 @@
 package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertEquals
 
-class CategorySectionsTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = TestSecretBox())
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
-
+class CategorySectionsTest : LoggedInCoreTest() {
     private fun refreshed(): List<Pair<String, List<String>>> = runBlocking {
         assertEquals(Outcome.Ok, core.refresh())
         core.sections.map { section -> section.category to section.articles.map { it.title } }

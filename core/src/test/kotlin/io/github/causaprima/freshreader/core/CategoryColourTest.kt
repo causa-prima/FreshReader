@@ -1,36 +1,12 @@
 package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
-class CategoryColourTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private val secretBox = TestSecretBox()
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = secretBox)
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
-
+class CategoryColourTest : LoggedInCoreTest() {
     /** One unread Article in each of [categories]. */
     private fun addCategories(vararg categories: String) {
         for (category in categories) {
@@ -61,8 +37,7 @@ class CategoryColourTest {
             val ofJob = core.categoryColour("Job")
 
             core.setCategoryColour("Leisure", ofJob)
-            core.close() // the app is restarted
-            core = Core(storeDir = storeDir, secretBox = secretBox)
+            restart()
             assertEquals(Outcome.Ok, core.refresh())
 
             assertEquals(ofJob, core.categoryColour("Leisure"))

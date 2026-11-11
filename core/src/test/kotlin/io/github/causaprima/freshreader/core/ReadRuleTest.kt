@@ -3,39 +3,17 @@ package io.github.causaprima.freshreader.core
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertEquals
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-class ReadRuleTest {
-    private val server = FakeFreshRss().start()
+class ReadRuleTest : LoggedInCoreTest() {
+    override fun newCore() = newCore(firstRetryDelay = 10.milliseconds)
 
-    @TempDir
-    lateinit var storeDir: File
-
-    private val secretBox = TestSecretBox()
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = newCore()
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
-
-    private fun newCore(firstRetryDelay: Duration = 10.milliseconds) =
+    private fun newCore(firstRetryDelay: Duration) =
         Core(storeDir = storeDir, secretBox = secretBox, firstRetryDelay = firstRetryDelay)
 
     /** Two Categories in Reading Order News, Pictures; the list reads News 1, News 2, Pictures 1, Pictures 2. */

@@ -1,34 +1,10 @@
 package io.github.causaprima.freshreader.core
 
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import kotlin.test.assertEquals
 
-class ReadingOrderTest {
-    private val server = FakeFreshRss().start()
-
-    @TempDir
-    lateinit var storeDir: File
-
-    private val secretBox = TestSecretBox()
-    private lateinit var core: Core
-
-    @BeforeEach
-    fun logIn() = runBlocking<Unit> {
-        core = Core(storeDir = storeDir, secretBox = secretBox)
-        assertEquals(Outcome.Ok, core.logIn(server.url, "reader", "api-secret"))
-    }
-
-    @AfterEach
-    fun tearDown() {
-        core.close()
-        server.close()
-    }
-
+class ReadingOrderTest : LoggedInCoreTest() {
     /** One unread Article in each of the reader's five Categories. */
     private fun addDailyCategories() {
         for (category in listOf("Job", "Leisure", "News", "Pictures", "Updates")) {
@@ -65,11 +41,10 @@ class ReadingOrderTest {
         addDailyCategories()
         core.setReadingOrder(listOf("News", "Updates", "Job", "Pictures", "Leisure"))
 
-        Core(storeDir = storeDir, secretBox = secretBox).use { restarted ->
-            assertEquals(Outcome.Ok, restarted.refresh())
+        restart()
+        assertEquals(Outcome.Ok, core.refresh())
 
-            assertEquals(listOf("News", "Updates", "Job", "Pictures", "Leisure"), restarted.sections.map { it.category })
-        }
+        assertEquals(listOf("News", "Updates", "Job", "Pictures", "Leisure"), sectionOrder())
     }
 
     @Test
