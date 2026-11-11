@@ -118,6 +118,11 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         articles += FakeArticle(id, title, feedTitle, published, read, content, url ?: "https://example.org/$id")
     }
 
+    /** Marks the Article [title] read on the Server itself, e.g. in FreshRSS's web interface. */
+    fun readElsewhere(title: String) = synchronized(articles) {
+        articles.replaceAll { if (it.title == title) it.copy(read = true) else it }
+    }
+
     private fun feedOf(article: FakeArticle) = feeds.first { it.title == article.feedTitle }
 
     /**

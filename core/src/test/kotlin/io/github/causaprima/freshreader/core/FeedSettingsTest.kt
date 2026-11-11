@@ -1,5 +1,6 @@
 package io.github.causaprima.freshreader.core
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
 import org.junit.jupiter.api.Test
@@ -89,6 +90,19 @@ class FeedSettingsTest : LoggedInCoreTest() {
 
         assertEquals(2, view.select("table").size, "the tables stay")
         assertEquals(emptyList(), view.select("table[width], col[width], colgroup[width], td[width], th[width]").map { it.tagName() })
+    }
+
+    @Test
+    fun `Feed Settings changed for two Feeds one right after another are both kept`() = runBlocking<Unit> {
+        val elevators = addXkcd()
+        val comic = addDinosaurComics()
+
+        listOf(elevators, comic)
+            .map { article -> launch { core.setFeedSettings(article.feedId, FeedSettings(bonusText = true)) } }
+            .forEach { it.join() }
+
+        assertEquals(FeedSettings(bonusText = true), core.feedSettings(elevators.feedId))
+        assertEquals(FeedSettings(bonusText = true), core.feedSettings(comic.feedId))
     }
 
     @Test
