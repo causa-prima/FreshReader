@@ -124,6 +124,7 @@ import io.github.causaprima.freshreader.core.CategoryColour
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
 import io.github.causaprima.freshreader.core.PageLoad
+import io.github.causaprima.freshreader.core.overHttps
 import io.github.causaprima.freshreader.core.ReaderView
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
@@ -964,8 +965,9 @@ private suspend fun WebView.evaluate(script: String): String =
 
 /**
  * The in-app browser for Original Pages. JavaScript and DOM storage are on, as pages and their consent managers
- * need them; the cookies, and with them consents, are kept. Links stay in the browser; other schemes, e.g.
- * mailto:, go to other apps. [onPageChanged]: a new page has become visible or has finished loading. Requests the
+ * need them; the cookies, and with them consents, are kept. As in a browser, a page made for desktop screens only,
+ * without a viewport of its own, such as Joy of Tech's, is laid out wide and shown whole, zoomed out. Links stay in
+ * the browser, links over plain http go [overHttps]; other schemes, e.g. mailto:, go to other apps. [onPageChanged]: a new page has become visible or has finished loading. Requests the
  * browser [letsThrough] load; the others are refused.
  */
 @SuppressLint("SetJavaScriptEnabled")
@@ -985,11 +987,18 @@ private fun inAppBrowser(
         setSupportZoom(true)
         builtInZoomControls = true
         displayZoomControls = false
+        useWideViewPort = true
+        loadWithOverviewMode = true
         allowFileAccess = false
         allowContentAccess = false
     }
     webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            // Not for a redirect: a site that redirects from https to http would otherwise be loaded in circles.
+            if (request.url.scheme == "http" && request.isForMainFrame && !request.isRedirect) {
+                view.loadUrl(overHttps(request.url.toString()))
+                return true
+            }
             if (request.url.scheme in setOf("http", "https")) return false
             view.context.openExternally(request.url)
             return true

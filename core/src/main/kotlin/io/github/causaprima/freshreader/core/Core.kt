@@ -345,11 +345,12 @@ class Core(
     }
 
     /**
-     * The link to [article]'s Original Page, for showing, opening and sharing it; null if the Feed gives none.
+     * The link to [article]'s Original Page, for showing, opening and sharing it, [overHttps]; null if the Feed
+     * gives none.
      */
     suspend fun originalPageUrl(article: Article): String? {
         val link = article.url ?: return null
-        return withContext(Dispatchers.IO) { followIt.unwrap(link) }
+        return overHttps(withContext(Dispatchers.IO) { followIt.unwrap(link) })
     }
 
     /** The Feed Settings of the Feed [feedId]; defaults for a Feed the reader has not changed. */
@@ -371,3 +372,11 @@ class Core(
         val MAX_RETRY_DELAY = 5.minutes
     }
 }
+
+/**
+ * [link], if over plain http, over https instead. Android refuses to load pages over plain http, also in the in-app
+ * browser; Dinosaur Comics, for one, links its comics over http, while its site answers over https as well.
+ */
+fun overHttps(link: String): String = PLAIN_HTTP_LINK.replace(link, "https://")
+
+private val PLAIN_HTTP_LINK = Regex("""^http://""", RegexOption.IGNORE_CASE)
