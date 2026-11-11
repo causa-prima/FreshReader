@@ -1,5 +1,6 @@
 package io.github.causaprima.freshreader.core
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -75,5 +76,22 @@ class ReadingOrderTest : LoggedInCoreTest() {
         val expected = listOf("News", "Updates", "Job", "Leisure", "Comics", "Gaming")
         assertEquals(expected, sectionOrder())
         assertEquals(expected, core.categories)
+    }
+
+    @Test
+    fun `Reading Order changes made one right after another end with the last one`() = runBlocking<Unit> {
+        addDailyCategories()
+        assertEquals(Outcome.Ok, core.refresh())
+
+        // The reader drags Categories quickly; each drop starts storing before the previous one is stored.
+        listOf(
+            listOf("News", "Job", "Leisure", "Pictures", "Updates"),
+            listOf("News", "Updates", "Job", "Leisure", "Pictures"),
+        ).map { order -> launch { core.setReadingOrder(order) } }.forEach { it.join() }
+
+        assertEquals(listOf("News", "Updates", "Job", "Leisure", "Pictures"), sectionOrder())
+        restart()
+        assertEquals(Outcome.Ok, core.refresh())
+        assertEquals(listOf("News", "Updates", "Job", "Leisure", "Pictures"), sectionOrder())
     }
 }

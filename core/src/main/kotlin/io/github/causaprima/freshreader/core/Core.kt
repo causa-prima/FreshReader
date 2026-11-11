@@ -88,13 +88,23 @@ class Core(
     @Volatile
     private var api: GoogleReaderApi? = null
     private val sessionLock = Mutex()
+
+    /**
+     * Changes to the list snapshot and to the reader's settings are applied one after another, in the order they
+     * were asked for; the fields below change only while it is held.
+     */
+    private val changeLock = Mutex()
     private val readingOrderStore = ReadingOrderStore(storeDir)
+    @Volatile
     private var readingOrder: List<String> = readingOrderStore.load()
     private val categoryColourStore = CategoryColourStore(storeDir)
+    @Volatile
     private var chosenCategoryColours: Map<String, CategoryColour> = categoryColourStore.load()
     private val feedSettingsStore = FeedSettingsStore(storeDir)
+    @Volatile
     private var feedSettings: Map<String, FeedSettings> = feedSettingsStore.load()
     private var unread: List<Article> = emptyList()
+    @Volatile
     private var categoryOfFeed: Map<String, String> = emptyMap()
     @Volatile
     private var feedInfo: Map<String, GoogleReaderApi.FeedInfo> = emptyMap()
@@ -118,9 +128,16 @@ class Core(
     /** Whether all read marks have reached the Server; changes in the background. */
     val syncStatus: StateFlow<SyncStatus> = _syncStatus
 
-    /** The current list snapshot, sectioned by Category; replaced by [refresh], rearranged by [setReadingOrder]. */
-    var sections: List<Section> = emptyList()
-        private set
+    private val _snapshot = MutableStateFlow<List<Section>>(emptyList())
+
+    /**
+     * The list snapshot, sectioned by Category, as it changes: replaced by [refresh], rearranged by
+     * [setReadingOrder], and its Articles greyed out as they are read.
+     */
+    val snapshot: StateFlow<List<Section>> = _snapshot
+
+    /** The current list snapshot; see [snapshot]. */
+    val sections: List<Section> get() = _snapshot.value
 
     /** All Articles of the snapshot in display order, across sections. */
     val articles: List<Article> get() = sections.flatMap { it.articles }
@@ -179,20 +196,33 @@ class Core(
             is ApiResult.Success -> result.value
             is ApiResult.Failure -> return result.outcome
         }
-        val pending = outboxLock.withLock { outbox.toSet() }
-        this.unread = unread.filterNot { it.id in pending }
-        categoryOfFeed = feeds.mapValues { it.value.category }
-        feedInfo = feeds
-        readIds.clear()
-        rebuildSections()
+        changeLock.withLock {
+            val pending = outboxLock.withLock { outbox.toSet() }
+            this.unread = unread.filterNot { it.id in pending }
+            categoryOfFeed = feeds.mapValues { it.value.category }
+            feedInfo = feeds
+            readIds.clear()
+            rebuildSections()
+        }
         return Outcome.Ok
     }
 
     /**
-     * The read rule: opening the Article at [position] in [articles] marks it and every earlier Article
-     * as read, across Categories. Articles already read stay as they are.
+     * The read rule: opening [article] marks it and every Article before it in the current list snapshot as read,
+     * across Categories. Articles already read stay as they are; an Article no longer in the snapshot, e.g. dropped
+     * by a refresh, marks nothing.
      */
-    suspend fun openArticle(position: Int) {
+    suspend fun openArticle(article: Article) = changeLock.withLock {
+        markReadUpTo(articles.indexOfFirst { it.id == article.id })
+    }
+
+    /**
+     * Marks every not-yet-read Article of the snapshot as read. Only the snapshot's Article ids are sent,
+     * so Articles that arrived on the Server since the last refresh stay unread.
+     */
+    suspend fun markAllAsRead() = changeLock.withLock { markReadUpTo(articles.lastIndex) }
+
+    private suspend fun markReadUpTo(position: Int) {
         val newlyRead = articles.take(position + 1).filterNot { it.read }.map { it.id }
         if (newlyRead.isEmpty()) return
         readIds += newlyRead
@@ -204,12 +234,6 @@ class Core(
         }
         sendRequests.trySend(Unit)
     }
-
-    /**
-     * Marks every not-yet-read Article of the snapshot as read. Only the snapshot's Article ids are sent,
-     * so Articles that arrived on the Server since the last refresh stay unread.
-     */
-    suspend fun markAllAsRead() = openArticle(articles.lastIndex)
 
     /**
      * Sends the outbox to the Server in batches. Transient failures are retried with exponential backoff
@@ -267,7 +291,7 @@ class Core(
     }
 
     private fun rebuildSections() {
-        sections = buildSections(unread.map { it.copy(read = it.id in readIds) }, categoryOfFeed, readingOrder)
+        _snapshot.value = buildSections(unread.map { it.copy(read = it.id in readIds) }, categoryOfFeed, readingOrder)
     }
 
     /**
@@ -331,14 +355,14 @@ class Core(
     fun chosenCategoryColour(category: String): CategoryColour? = chosenCategoryColours[category]
 
     /** Sets the Category Colour of [category], kept by its name; null lets it be picked automatically again. */
-    suspend fun setCategoryColour(category: String, colour: CategoryColour?) {
+    suspend fun setCategoryColour(category: String, colour: CategoryColour?) = changeLock.withLock {
         val colours = if (colour == null) chosenCategoryColours - category else chosenCategoryColours + (category to colour)
         withContext(Dispatchers.IO) { categoryColourStore.save(colours) }
         chosenCategoryColours = colours
     }
 
     /** Replaces the Reading Order: the reader's chosen sequence of Categories, by name. */
-    suspend fun setReadingOrder(order: List<String>) {
+    suspend fun setReadingOrder(order: List<String>) = changeLock.withLock {
         withContext(Dispatchers.IO) { readingOrderStore.save(order) }
         readingOrder = order
         rebuildSections()
@@ -357,7 +381,7 @@ class Core(
     fun feedSettings(feedId: String): FeedSettings = feedSettings[feedId] ?: FeedSettings()
 
     /** Replaces the Feed Settings of the Feed [feedId]; the next prepared Article View follows them. */
-    suspend fun setFeedSettings(feedId: String, settings: FeedSettings) {
+    suspend fun setFeedSettings(feedId: String, settings: FeedSettings) = changeLock.withLock {
         val changed = feedSettings + (feedId to settings)
         withContext(Dispatchers.IO) { feedSettingsStore.save(changed) }
         feedSettings = changed

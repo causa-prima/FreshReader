@@ -18,7 +18,6 @@ import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
 import io.github.causaprima.freshreader.core.ViewMode
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -119,20 +118,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Whether the read marks have reached the Server; a permanent failure shows as a hint. */
     val syncStatus: StateFlow<SyncStatus> = core.syncStatus
 
-    /** The read rule of the last opened Article, applied while the Article View is shown; applied in order. */
-    private var opening: Job? = null
-
-    /** The last Reading Order or Category Colour change still being stored; applied one after another. */
-    private var settingsChange: Job? = null
     /** The Reading Order as the settings were opened with it. */
     private var readingOrderBefore: List<String> = emptyList()
-
-    /** The last Feed Settings change still being stored; changes are applied one after another. */
-    private var feedSettingsChange: Job? = null
 
     init {
         viewModelScope.launch {
             if (withContext(Dispatchers.IO) { core.hasStoredCredentials }) refresh() else _screen.value = Screen.Login()
+        }
+        // The list shows the snapshot as it changes, e.g. Articles greyed out once their read rule is applied.
+        viewModelScope.launch {
+            core.snapshot.collect { sections ->
+                val list = _screen.value as? Screen.Articles ?: return@collect
+                _screen.value = list.copy(sections = sections)
+            }
         }
     }
 
@@ -171,19 +169,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { refresh() }
     }
 
+    /** Opens [article] from the list; not while a refresh is about to replace the list. */
     fun openArticle(article: Article) {
+        val list = _screen.value as? Screen.Articles ?: return
+        if (list.refreshing) return
         val articles = core.articles
         val position = articles.indexOfFirst { it.id == article.id }
         if (position < 0) return
         _screen.value = Screen.ArticleView(articles, position)
-        applyReadRule(position)
+        viewModelScope.launch { core.openArticle(article) }
     }
 
     /** The reader swiped to the Article at [position]; arriving there counts as opening it. */
     fun showArticle(position: Int) {
         val view = _screen.value as? Screen.ArticleView ?: return
         _screen.value = view.copy(position = position)
-        applyReadRule(position)
+        viewModelScope.launch { core.openArticle(view.articles[position]) }
     }
 
     /** Pull-to-refresh: replaces the snapshot. If the Server cannot be reached, the current list stays. */
@@ -191,14 +192,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val list = _screen.value as? Screen.Articles ?: return
         _screen.value = list.copy(focus = null, refreshing = true, refreshError = null)
         viewModelScope.launch {
-            opening?.join()
-            _screen.value = when (val outcome = withContext(Dispatchers.IO) { core.refresh() }) {
-                Outcome.Ok -> Screen.Articles(core.sections)
-                Outcome.WrongCredentials, Outcome.InvalidServerUrl ->
-                    Screen.Login(error = outcome, account = withContext(Dispatchers.IO) { core.account })
-                is Outcome.Unreachable, is Outcome.ServerError ->
-                    Screen.Articles(core.sections, refreshError = outcome)
-            }
+            val outcome = withContext(Dispatchers.IO) { core.refresh() }
+            val next = screenAfter(outcome) { Screen.Articles(core.sections, refreshError = it) }
+            if (_screen.value is Screen.Articles) _screen.value = next
         }
     }
 
@@ -207,15 +203,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _screen.value = list.copy(refreshError = null)
     }
 
-    /** Marks every not-yet-read Article of the snapshot as read. */
+    /** Marks every not-yet-read Article of the snapshot as read; not while a refresh is about to replace it. */
     fun markAllAsRead() {
-        val previous = opening
-        opening = viewModelScope.launch {
-            previous?.join()
-            core.markAllAsRead()
-            val list = _screen.value as? Screen.Articles ?: return@launch
-            _screen.value = list.copy(sections = core.sections, focus = null)
-        }
+        val list = _screen.value as? Screen.Articles ?: return
+        if (list.refreshing) return
+        _screen.value = list.copy(focus = null)
+        viewModelScope.launch { core.markAllAsRead() }
     }
 
     /** Decoded favicons by Feed id, so that scrolling does not decode them again. */
@@ -262,9 +255,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val view = _screen.value as? Screen.ArticleView ?: return
         val sheet = view.feedSettings ?: return
         _screen.value = view.copy(feedSettings = sheet.copy(settings = settings))
-        val previous = feedSettingsChange
-        feedSettingsChange = viewModelScope.launch {
-            previous?.join()
+        viewModelScope.launch {
             core.setFeedSettings(sheet.feedId, settings)
             val current = _screen.value as? Screen.ArticleView ?: return@launch
             _screen.value = current.copy(revision = current.revision + 1)
@@ -277,19 +268,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeArticle() {
-        val focus = (_screen.value as? Screen.ArticleView)?.article?.id
-        viewModelScope.launch {
-            opening?.join()
-            _screen.value = Screen.Articles(core.sections, focus)
-        }
-    }
-
-    private fun applyReadRule(position: Int) {
-        val previous = opening
-        opening = viewModelScope.launch {
-            previous?.join()
-            core.openArticle(position)
-        }
+        val view = _screen.value as? Screen.ArticleView ?: return
+        _screen.value = Screen.Articles(core.sections, focus = view.article.id)
     }
 
     fun openSettings() {
@@ -316,9 +296,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Chooses [category]'s Category Colour; null lets it be picked automatically. */
     fun setCategoryColour(category: String, colour: CategoryColour?) {
-        val previous = settingsChange
-        settingsChange = viewModelScope.launch {
-            previous?.join()
+        viewModelScope.launch {
             core.setCategoryColour(category, colour)
             showColours()
         }
@@ -327,29 +305,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setReadingOrder(order: List<String>) {
         val settings = _screen.value as? Screen.Settings ?: return
         _screen.value = settings.copy(categories = order)
-        val previous = settingsChange
-        settingsChange = viewModelScope.launch {
-            previous?.join()
+        viewModelScope.launch {
             core.setReadingOrder(order)
             showColours()
         }
     }
 
+    /** Back to the list; it shows the Reading Order once stored, from the top if it was changed. */
     fun closeSettings() {
-        viewModelScope.launch {
-            settingsChange?.join()
-            _screen.value = Screen.Articles(core.sections, fromTop = core.categories != readingOrderBefore)
-        }
+        val settings = _screen.value as? Screen.Settings ?: return
+        _screen.value = Screen.Articles(core.sections, fromTop = settings.categories != readingOrderBefore)
     }
 
     override fun onCleared() = core.close()
 
     private suspend fun refresh() {
-        _screen.value = when (val outcome = withContext(Dispatchers.IO) { core.refresh() }) {
-            Outcome.Ok -> Screen.Articles(core.sections)
-            Outcome.WrongCredentials, Outcome.InvalidServerUrl ->
-                Screen.Login(error = outcome, account = withContext(Dispatchers.IO) { core.account })
-            is Outcome.Unreachable, is Outcome.ServerError -> Screen.Failed(outcome)
-        }
+        val outcome = withContext(Dispatchers.IO) { core.refresh() }
+        _screen.value = screenAfter(outcome) { Screen.Failed(it) }
+    }
+
+    /** The screen after a refresh with [outcome]: the list, the login, or [unreachable] if the Server failed. */
+    private suspend fun screenAfter(outcome: Outcome, unreachable: (Outcome) -> Screen): Screen = when (outcome) {
+        Outcome.Ok -> Screen.Articles(core.sections)
+        Outcome.WrongCredentials, Outcome.InvalidServerUrl ->
+            Screen.Login(error = outcome, account = withContext(Dispatchers.IO) { core.account })
+        is Outcome.Unreachable, is Outcome.ServerError -> unreachable(outcome)
     }
 }

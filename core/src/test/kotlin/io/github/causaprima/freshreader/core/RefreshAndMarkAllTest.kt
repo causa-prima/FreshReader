@@ -23,7 +23,7 @@ class RefreshAndMarkAllTest : LoggedInCoreTest() {
         addNews("First", published = 1_800_000_000)
         addNews("Second", published = 1_800_000_100)
         assertEquals(Outcome.Ok, core.refresh())
-        core.openArticle(0)
+        core.openArticle(core.articles[0])
         core.awaitSynced()
         addNews("Third", published = 1_800_000_200)
 
@@ -40,7 +40,7 @@ class RefreshAndMarkAllTest : LoggedInCoreTest() {
 
         addNews("Arrived earlier", published = 1_700_000_000)
         server.articles[1] = server.articles[1].copy(read = true) // "Second", read on another device
-        core.openArticle(0)
+        core.openArticle(core.articles[0])
         core.awaitSynced()
 
         assertEquals(listOf("First", "Second"), titles())
@@ -52,7 +52,7 @@ class RefreshAndMarkAllTest : LoggedInCoreTest() {
         addNews("Second", published = 1_800_000_100)
         addNews("Third", published = 1_800_000_200)
         assertEquals(Outcome.Ok, core.refresh())
-        core.openArticle(0)
+        core.openArticle(core.articles[0])
         core.awaitSynced()
         addNews("Arrived later", published = 1_800_000_300)
 

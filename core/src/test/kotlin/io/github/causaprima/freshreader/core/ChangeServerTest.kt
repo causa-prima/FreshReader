@@ -33,7 +33,7 @@ class ChangeServerTest {
         assertEquals(Outcome.Ok, core.logIn(oldServer.url, "reader", "api-secret"))
         assertEquals(Outcome.Ok, core.refresh())
         oldServer.editTagStatus = 503 // the read marks stay pending
-        core.openArticle(1)
+        core.openArticle(core.articles[1])
         assertEquals(SyncStatus.Pending(2), core.syncStatus.value)
     }
 
