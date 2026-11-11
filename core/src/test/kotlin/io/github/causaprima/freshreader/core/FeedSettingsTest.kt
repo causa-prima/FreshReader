@@ -106,6 +106,14 @@ class FeedSettingsTest : LoggedInCoreTest() {
     }
 
     @Test
+    fun `Bonus Text applies to Feed Content and the Reader View, not to the Original Page, which shows the site as it is`() {
+        assertEquals(
+            mapOf(ViewMode.FeedContent to true, ViewMode.ReaderView to true, ViewMode.OriginalPage to false),
+            ViewMode.entries.associateWith { FeedSettings(viewMode = it, bonusText = true).bonusTextApplies },
+        )
+    }
+
+    @Test
     fun `Feed Settings belong to their Feed and survive a restart`() = runBlocking<Unit> {
         val elevators = addXkcd()
         val comic = addDinosaurComics()

@@ -74,8 +74,8 @@ class Core(
     /** Time zone and locale of the dates shown to the reader. */
     zone: ZoneId = ZoneId.systemDefault(),
     locale: Locale = Locale.getDefault(),
-    /** The time that decides when a fallback favicon is looked at again. */
-    clock: Clock = Clock.systemUTC(),
+    /** The time that decides when a fallback favicon is looked at again, and when the Reader View gives up on a page. */
+    private val clock: Clock = Clock.systemUTC(),
     /** Wait before the first retry of read marks after a transient failure; doubles with each retry. */
     private val firstRetryDelay: Duration = 2.seconds,
 ) : AutoCloseable {
@@ -315,32 +315,22 @@ class Core(
         articleViewDocument(article, feedSettings(article.feedId), dateFormat)
 
     /**
-     * Whether the in-app browser, loading an Original Page as [PageLoad.TextAndLayout] for the Reader View, lets a
-     * request through: the page itself, [isPageItself], and its stylesheets, by what the request [accept]s. Scripts,
-     * ads, trackers, images and fonts are not needed for the main content; see ADR 0002.
+     * What the Article View shows of [article], following its Feed's View Mode: the prepared Feed Content, or the
+     * Reader View or Original Page of its real page, see [originalPageUrl]. An Article whose Feed gives no link to its
+     * page is shown as Feed Content.
      */
-    fun readerViewLoads(isPageItself: Boolean, accept: String?): Boolean =
-        isPageItself || accept?.startsWith("text/css") == true
-
-    /** The script to run in a loaded Original Page; [readerView] reads its result. */
-    val readerViewScript: String get() = READER_VIEW_SCRIPT
-
-    /**
-     * The Reader View of [article], from [report]: the result of the Reader View script in the in-app browser,
-     * as `evaluateJavascript` returns it, after it was asked to load [pageUrl], the Article's Original Page, as
-     * [pageLoad]. Loaded as text and layout only, the page's scripts do not run, so neither does its consent manager.
-     */
-    fun readerView(article: Article, pageUrl: String, pageLoad: PageLoad, report: String): ReaderView {
-        val page = pageReport(report) ?: return ReaderView.Failed
-        if (page.loading) return ReaderView.NotYet
-        if (page.url != null && !isSamePage(page.url, pageUrl)) return ReaderView.ShowPage
-        if (pageLoad == PageLoad.Complete) page.tcf?.let { consentManager ->
-            if (!consentManager.loaded) return ReaderView.NotYet
-            if (consentManager.displayStatus == "visible") return ReaderView.ShowPage
+    suspend fun articlePage(article: Article): ArticlePage {
+        val viewMode = if (article.url == null) ViewMode.FeedContent else feedSettings(article.feedId).viewMode
+        return when (viewMode) {
+            ViewMode.FeedContent -> ArticlePage.FeedContent(prepareArticleView(article))
+            ViewMode.ReaderView -> ArticlePage.ReaderView(checkNotNull(originalPageUrl(article)))
+            ViewMode.OriginalPage -> ArticlePage.OriginalPage(checkNotNull(originalPageUrl(article)))
         }
-        val content = page.content ?: return ReaderView.Failed
-        return ReaderView.Ready(articleViewDocument(article, feedSettings(article.feedId), dateFormat, content))
     }
+
+    /** The Reader View of [article] from its Original Page at [pageUrl], as [articlePage] gave it. */
+    fun readerView(article: Article, pageUrl: String): ReaderViewSession =
+        ReaderViewSession(pageUrl, { content -> articleViewDocument(article, feedSettings(article.feedId), dateFormat, content) }, clock)
 
     /**
      * The Category Colour of [category]: the reader's choice, else one picked automatically that differs from its

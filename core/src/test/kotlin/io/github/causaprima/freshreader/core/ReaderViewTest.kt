@@ -8,15 +8,25 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.jsoup.Jsoup
 import org.junit.jupiter.api.Test
+import java.time.Instant
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.toJavaDuration
 
 /**
- * The Reader View: the Core's script runs in the loaded Original Page and reports what it found there; the
- * Core turns that report into what the Article View shows.
+ * The Reader View of an Article: the in-app browser loads its Original Page and tells the Core's Reader View what
+ * happens there; the Core's script reports from the page what it found. The Reader View answers what the browser
+ * loads, what to do next, and what the reader sees.
  */
 class ReaderViewTest : LoggedInCoreTest() {
+    private val clock = MutableClock(Instant.parse("2026-11-11T12:00:00Z"))
+
+    override fun newCore() = Core(storeDir = storeDir, secretBox = secretBox, clock = clock)
+
     private fun addArticle(title: String, feed: String): Article = runBlocking {
         server.addFeed(feed, category = "News")
         server.addArticle(title, feedTitle = feed, published = 1_793_595_600, url = "https://example.org/$title", content = "<p>The Feed's teaser.</p>")
@@ -24,15 +34,27 @@ class ReaderViewTest : LoggedInCoreTest() {
         core.articles.single { it.title == title }
     }
 
+    /** The Reader View of [article], its page shown to the reader and loaded as far as its document. */
+    private fun readerView(article: Article): ReaderViewSession =
+        core.readerView(article, article.url!!).also { it.pageChanged() }
+
+    /** The Reader View of [article] after the reader asked to load the complete page. */
+    private fun loadedCompletely(article: Article): ReaderViewSession =
+        readerView(article).also { it.loadCompletely(); it.pageChanged() }
+
+    private fun ReaderViewSession.letsThroughImage(url: String = "https://example.org/truck.jpg") =
+        letsThrough(url, isPageItself = false, accept = IMAGE)
+
     @Test
     fun `the Reader View shows the page's main content under the Article's header, laid out like Feed Content`() =
         runBlocking<Unit> {
             val article = addArticle("Cybertruck", feed = "Golem.de")
             core.setFeedSettings(article.feedId, FeedSettings(viewMode = ViewMode.ReaderView, bonusText = true))
+            val readerView = readerView(article)
 
-            val shown = core.readerView(article, article.url!!, PageLoad.Complete, pageReport(consentWall = CONSENT_GIVEN, mainContent = MAIN_CONTENT))
+            assertEquals(ReaderViewSession.Next.Stop, readerView.reported(pageReport(consentWall = null, mainContent = MAIN_CONTENT), visible = true))
 
-            val document = assertIs<ReaderView.Ready>(shown).document
+            val document = assertIs<ReaderViewState.Ready>(readerView.state.value).document
             assertEquals("Cybertruck", Jsoup.parse(document).selectFirst("h1")?.text())
             assertContains(textAfter(document, "h1"), "Golem.de")
             assertContains(textAfter(document, "h1"), "The production ends in 2027.")
@@ -43,34 +65,133 @@ class ReaderViewTest : LoggedInCoreTest() {
         }
 
     @Test
-    fun `while a consent wall is shown, the Reader View asks for consent, although the content lies beneath the wall`() {
-        // Der Postillon: its pay-or-consent wall covers the Article, which is complete in the page underneath.
-        val article = addArticle("Newsticker", feed = "Der Postillon")
+    fun `a change of the Feed Settings prepares the shown main content again, without loading the page again`() =
+        runBlocking<Unit> {
+            val article = addArticle("Cybertruck", feed = "Golem.de")
+            val readerView = readerView(article)
+            readerView.reported(pageReport(consentWall = null, mainContent = MAIN_CONTENT), visible = true)
+            assertFalse("The truck in Texas." in visibleText(assertIs<ReaderViewState.Ready>(readerView.state.value).document))
 
-        val shown = core.readerView(article, article.url!!, PageLoad.Complete, pageReport(consentWall = CONSENT_WALL_SHOWN, mainContent = MAIN_CONTENT))
+            core.setFeedSettings(article.feedId, FeedSettings(viewMode = ViewMode.ReaderView, bonusText = true))
+            readerView.prepareAgain()
 
-        assertEquals(ReaderView.ShowPage, shown)
+            assertContains(visibleText(assertIs<ReaderViewState.Ready>(readerView.state.value).document), "The truck in Texas.")
+        }
+
+    @Test
+    fun `loading text and layout only, the Reader View lets through the page itself and its stylesheets, nothing else`() {
+        // What the in-app browser asks for, as Chromium describes it: whether it is the page itself, and what it accepts.
+        val readerView = readerView(addArticle("Copernicus", feed = "Golem.de"))
+        val page = "https://example.org/Copernicus"
+        val allowed = mapOf(
+            "the page itself" to readerView.letsThrough(page, isPageItself = true, accept = HTML),
+            "a stylesheet" to readerView.letsThrough("https://example.org/site.css", isPageItself = false, accept = "text/css,*/*;q=0.1"),
+            "a script, or a font" to readerView.letsThrough("https://example.org/ads.js", isPageItself = false, accept = "*/*"),
+            "an image" to readerView.letsThroughImage(),
+            "an ad's frame" to readerView.letsThrough("https://ads.example.com/", isPageItself = false, accept = HTML),
+            "a request by a script" to readerView.letsThrough("https://example.org/api", isPageItself = false, accept = null),
+        )
+
+        assertEquals(mapOf("the page itself" to true, "a stylesheet" to true), allowed.filterValues { it })
     }
 
     @Test
-    fun `a page the site has sent the reader to instead of the Article, e g a consent page, is shown as it is`() {
-        // Golem.de: without consent it redirects to its consent page. Once the reader consents there, the consent
-        // manager shows no wall any more, before the site returns to the Article; its text is not the Article's.
-        val article = addArticle("Copernicus", feed = "Golem.de")
+    fun `a consent page the site sends the reader to is loaded completely, and the Article after it as text and layout only`() {
+        // Golem.de redirects on its server to its consent page, scripts or not. The reader decides there, which needs
+        // the page's scripts; then the site returns to the Article, which needs none of them (ADR 0002).
+        val readerView = readerView(addArticle("Copernicus", feed = "Golem.de"))
         val consentPage = "https://example.org/sonstiges/zustimmung/auswahl.html?from=https%3A%2F%2Fexample.org%2FCopernicus"
 
-        val shown = core.readerView(article, article.url!!, PageLoad.Complete, pageReport(CONSENT_GIVEN, CONSENT_TEXT, pageUrl = consentPage))
+        assertEquals(ReaderViewSession.Next.Reload, readerView.reported(pageReport(null, CONSENT_TEXT, pageUrl = consentPage), visible = true))
+        assertTrue(readerView.letsThrough(consentPage, isPageItself = true, accept = HTML))
+        assertTrue(readerView.letsThroughImage(), "the consent page loads completely")
+        readerView.pageChanged()
+        assertEquals(
+            ReaderViewSession.Next.CheckAgainIn(1.seconds),
+            readerView.reported(pageReport(CONSENT_WALL_SHOWN, CONSENT_TEXT, pageUrl = consentPage), visible = true),
+        )
+        assertEquals(ReaderViewState.Page, readerView.state.value)
 
-        assertEquals(ReaderView.ShowPage, shown)
+        // The reader consents; the site sends the browser back to the Article.
+        assertTrue(readerView.letsThrough("https://example.org/Copernicus", isPageItself = true, accept = HTML))
+        assertFalse(readerView.letsThroughImage(), "the Article loads as text and layout only")
+        assertEquals(
+            ReaderViewSession.Next.CheckAgainIn(0.25.seconds),
+            readerView.reported(pageReport(CONSENT_GIVEN, CONSENT_TEXT, pageUrl = consentPage), visible = true),
+            "the consent page, still shown until the Article is there, is not loaded again",
+        )
+        assertFalse(readerView.letsThroughImage())
+        readerView.pageChanged()
+        assertEquals(ReaderViewSession.Next.Stop, readerView.reported(pageReport(null, MAIN_CONTENT), visible = true))
+        assertIs<ReaderViewState.Ready>(readerView.state.value)
+    }
+
+    @Test
+    fun `if the site sends the reader to its consent page again, that page loads completely again`() {
+        // E.g. as the consent was not stored; the reader decides again.
+        val readerView = readerView(addArticle("Copernicus", feed = "Golem.de"))
+        val consentPage = "https://example.org/sonstiges/zustimmung/auswahl.html"
+        readerView.reported(pageReport(null, CONSENT_TEXT, pageUrl = consentPage), visible = true)
+        readerView.letsThrough("https://example.org/Copernicus", isPageItself = true, accept = HTML)
+
+        assertTrue(readerView.letsThrough(consentPage, isPageItself = true, accept = HTML))
+
+        assertTrue(readerView.letsThroughImage())
+    }
+
+    @Test
+    fun `a neighbouring Article that meets a consent page loads again once it is shown, as the reader may have consented meanwhile`() {
+        val readerView = readerView(addArticle("Copernicus", feed = "Golem.de"))
+        val consentPage = "https://example.org/sonstiges/zustimmung/auswahl.html"
+
+        assertEquals(
+            ReaderViewSession.Next.ReloadWhenVisible,
+            readerView.reported(pageReport(null, CONSENT_TEXT, pageUrl = consentPage), visible = false),
+        )
+        assertFalse(readerView.letsThroughImage(), "still text and layout only")
+    }
+
+    @Test
+    fun `loaded completely, a consent wall over the Article is shown, although the content lies beneath the wall`() {
+        // Der Postillon: its pay-or-consent wall covers the Article, which is complete in the page underneath.
+        val readerView = loadedCompletely(addArticle("Newsticker", feed = "Der Postillon"))
+
+        assertEquals(
+            ReaderViewSession.Next.CheckAgainIn(1.seconds),
+            readerView.reported(pageReport(consentWall = CONSENT_WALL_SHOWN, mainContent = MAIN_CONTENT), visible = true),
+        )
+        assertEquals(ReaderViewState.Page, readerView.state.value)
+    }
+
+    @Test
+    fun `loaded completely, the Reader View waits while the consent manager is still loading instead of assuming there is no wall`() {
+        // Golem.de: 1.5 s after the page had loaded, its consent manager had not decided yet.
+        val readerView = loadedCompletely(addArticle("Copernicus", feed = "Golem.de"))
+
+        val next = readerView.reported(pageReport(consentWall = Tcf(loaded = false, displayStatus = null), mainContent = CONSENT_TEXT), visible = true)
+
+        assertEquals(ReaderViewSession.Next.CheckAgainIn(0.25.seconds), next)
+        assertEquals(ReaderViewState.Loading, readerView.state.value)
+    }
+
+    @Test
+    fun `loaded as text and layout only, the page shows no consent wall, so its consent manager is not waited for`() {
+        // Der Postillon: its consent manager is a script, which is not loaded; the Article is complete in the page.
+        val readerView = readerView(addArticle("Newsticker", feed = "Der Postillon"))
+
+        readerView.reported(pageReport(Tcf(loaded = false, displayStatus = null), MAIN_CONTENT), visible = true)
+
+        assertIs<ReaderViewState.Ready>(readerView.state.value)
     }
 
     @Test
     fun `if the page could not be loaded, the browser's error page is shown as it is, not taken for the Article`() {
         // On a congested connection, the page timed out; Readability finds the error page's text as main content.
-        val article = addArticle("Copernicus", feed = "Golem.de")
-        val errorPage = pageReport(consentWall = null, mainContent = "<p>This site can't be reached</p>", pageUrl = "chrome-error://chromewebdata/")
+        val readerView = loadedCompletely(addArticle("Copernicus", feed = "Golem.de"))
 
-        assertEquals(ReaderView.ShowPage, core.readerView(article, article.url!!, PageLoad.Complete, errorPage))
+        readerView.reported(pageReport(consentWall = null, mainContent = "<p>This site can't be reached</p>", pageUrl = "chrome-error://chromewebdata/"), visible = true)
+
+        assertEquals(ReaderViewState.Page, readerView.state.value)
     }
 
     @Test
@@ -79,83 +200,59 @@ class ReaderViewTest : LoggedInCoreTest() {
         val article = addArticle("Copernicus", feed = "Golem.de")
 
         for (pageUrl in listOf("https://example.org/Copernicus/", "https://news.example.com/2026/copernicus.html")) {
-            val shown = core.readerView(article, "http://example.org/Copernicus", PageLoad.Complete, pageReport(CONSENT_GIVEN, MAIN_CONTENT, pageUrl = pageUrl))
-            assertIs<ReaderView.Ready>(shown, pageUrl)
+            val readerView = core.readerView(article, "http://example.org/Copernicus").also { it.pageChanged() }
+            readerView.reported(pageReport(null, MAIN_CONTENT, pageUrl = pageUrl), visible = true)
+            assertIs<ReaderViewState.Ready>(readerView.state.value, pageUrl)
         }
-    }
-
-    @Test
-    fun `while the consent manager is still loading, the Reader View waits instead of assuming there is no wall`() {
-        // Golem.de: 1.5 s after the page had loaded, its consent manager had not decided yet.
-        val article = addArticle("Copernicus", feed = "Golem.de")
-
-        val shown = core.readerView(article, article.url!!, PageLoad.Complete, pageReport(consentWall = Tcf(loaded = false, displayStatus = null), mainContent = CONSENT_TEXT))
-
-        assertEquals(ReaderView.NotYet, shown)
     }
 
     @Test
     fun `while the page's document is still loading, the Reader View waits instead of showing a part of it`() {
         // The Reader View checks the page as soon as it can, before the page's ads and images have loaded.
-        val article = addArticle("Copernicus", feed = "Golem.de")
+        val readerView = readerView(addArticle("Copernicus", feed = "Golem.de"))
 
-        val shown = core.readerView(article, article.url!!, PageLoad.Complete, pageReport(consentWall = null, mainContent = MAIN_CONTENT, documentLoaded = false))
+        val next = readerView.reported(pageReport(consentWall = null, mainContent = MAIN_CONTENT, documentLoaded = false), visible = true)
 
-        assertEquals(ReaderView.NotYet, shown)
+        assertEquals(ReaderViewSession.Next.CheckAgainIn(0.25.seconds), next)
+        assertEquals(ReaderViewState.Loading, readerView.state.value)
     }
 
     @Test
-    fun `if the page has no main content, the Reader View gives way to the Original Page`() {
-        // Most sites have no consent manager; the Reader View depends only on Readability finding the main content.
-        val article = addArticle("Elevators", feed = "xkcd.com")
+    fun `if the page holds no main content, the reader is offered the complete page, which once loaded is shown as it is`() {
+        // A site that builds its articles with scripts yields none as text and layout only (ADR 0002).
+        val readerView = readerView(addArticle("Elevators", feed = "xkcd.com"))
 
-        assertIs<ReaderView.Ready>(core.readerView(article, article.url!!, PageLoad.Complete, pageReport(consentWall = null, mainContent = MAIN_CONTENT)))
-        assertEquals(ReaderView.Failed, core.readerView(article, article.url!!, PageLoad.Complete, pageReport(consentWall = null, mainContent = null)))
-        assertEquals(ReaderView.Failed, core.readerView(article, article.url!!, PageLoad.Complete, pageReport(consentWall = CONSENT_GIVEN, mainContent = null)))
+        assertEquals(ReaderViewSession.Next.Stop, readerView.reported(pageReport(consentWall = null, mainContent = null), visible = true))
+        assertEquals(ReaderViewState.NothingFound, readerView.state.value)
+
+        readerView.loadCompletely()
+        assertEquals(ReaderViewState.Loading, readerView.state.value)
+        assertTrue(readerView.letsThroughImage())
+        readerView.pageChanged()
+        readerView.reported(pageReport(consentWall = CONSENT_GIVEN, mainContent = null), visible = true)
+        assertEquals(ReaderViewState.Page, readerView.state.value)
     }
 
     @Test
-    fun `if the script could not report, say while the page navigates, the Reader View gives way to the Original Page`() {
-        val article = addArticle("Elevators", feed = "xkcd.com")
+    fun `if the script cannot report, the reader is told the page could not be read, not that it holds no Article`() {
+        val readerView = readerView(addArticle("Elevators", feed = "xkcd.com"))
 
-        assertEquals(ReaderView.Failed, core.readerView(article, article.url!!, PageLoad.Complete, "null")) // what evaluateJavascript returns then
+        readerView.reported("null", visible = true) // what evaluateJavascript returns, e.g. while the page navigates
+
+        assertEquals(ReaderViewState.Unreadable, readerView.state.value)
     }
 
     @Test
-    fun `loaded as text and layout only, the page shows no consent wall, so its consent manager is not waited for`() {
-        // Der Postillon: its consent manager is a script, which is not loaded; the Article is complete in the page.
-        val article = addArticle("Newsticker", feed = "Der Postillon")
-        val stillLoading = Tcf(loaded = false, displayStatus = null)
+    fun `if the page is not read within 15 seconds, the reader is told it could not be read`() {
+        val readerView = readerView(addArticle("Elevators", feed = "xkcd.com"))
+        val stillLoading = pageReport(consentWall = null, mainContent = null, documentLoaded = false)
 
-        val shown = core.readerView(article, article.url!!, PageLoad.TextAndLayout, pageReport(stillLoading, MAIN_CONTENT))
+        clock.now += 14.seconds.toJavaDuration()
+        assertEquals(ReaderViewSession.Next.CheckAgainIn(0.25.seconds), readerView.reported(stillLoading, visible = true))
+        clock.now += 1.seconds.toJavaDuration()
+        assertEquals(ReaderViewSession.Next.Stop, readerView.reported(stillLoading, visible = true))
 
-        assertIs<ReaderView.Ready>(shown)
-    }
-
-    @Test
-    fun `loaded as text and layout only, a page the site sent the reader to instead of the Article is still shown`() {
-        // Golem.de redirects on its server to its consent page, scripts or not.
-        val article = addArticle("Copernicus", feed = "Golem.de")
-        val consentPage = "https://example.org/sonstiges/zustimmung/auswahl.html"
-
-        val shown = core.readerView(article, article.url!!, PageLoad.TextAndLayout, pageReport(null, CONSENT_TEXT, pageUrl = consentPage))
-
-        assertEquals(ReaderView.ShowPage, shown)
-    }
-
-    @Test
-    fun `loading text and layout only, the Reader View lets through the page itself and its stylesheets, nothing else`() {
-        // What the in-app browser asks for, as Chromium describes it: whether it is the page itself, and what it accepts.
-        val allowed = mapOf(
-            "the page itself" to core.readerViewLoads(isPageItself = true, accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-            "a stylesheet" to core.readerViewLoads(isPageItself = false, accept = "text/css,*/*;q=0.1"),
-            "a script, or a font" to core.readerViewLoads(isPageItself = false, accept = "*/*"),
-            "an image" to core.readerViewLoads(isPageItself = false, accept = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"),
-            "an ad's frame" to core.readerViewLoads(isPageItself = false, accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-            "a request by a script" to core.readerViewLoads(isPageItself = false, accept = null),
-        )
-
-        assertEquals(mapOf("the page itself" to true, "a stylesheet" to true), allowed.filterValues { it })
+        assertEquals(ReaderViewState.Unreadable, readerView.state.value)
     }
 
     private companion object {
@@ -172,6 +269,10 @@ class ReaderViewTest : LoggedInCoreTest() {
         const val MAIN_CONTENT = "<div><p>The production ends in 2027.</p>" +
             "<img src=\"https://example.org/truck.jpg\" title=\"The truck in Texas.\">" +
             "<table width=\"740\"><tr><td>Year</td><td>Units</td></tr></table></div>"
+
+        /** What the browser accepts for a page and for an image, as Chromium asks. */
+        const val HTML = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        const val IMAGE = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
     }
 }
 

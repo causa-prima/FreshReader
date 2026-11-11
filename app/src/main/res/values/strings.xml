@@ -35,6 +35,7 @@
     <string name="view_mode_reader_view">Reader View</string>
     <string name="view_mode_reader_view_hint">The Article\'s web page, reduced to its main content. Loads no ads or trackers. Shows a site\'s consent page where the site insists on it.</string>
     <string name="reader_view_nothing_found">The page\'s text holds no article. Some sites build their articles with scripts, which the Reader View does not load.</string>
+    <string name="reader_view_unreadable">The page could not be read: it did not load in time, or the Reader View could not look into it.</string>
     <string name="reader_view_load_completely">Load the complete page</string>
     <string name="view_mode_original_page">Original Page</string>
     <string name="view_mode_original_page_hint">The Article\'s web page, in the in-app browser.</string>
