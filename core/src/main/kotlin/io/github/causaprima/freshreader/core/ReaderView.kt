@@ -13,14 +13,18 @@ sealed interface ReaderView {
     /**
      * The page itself is shown, as it is not, or not yet, the Article: a consent manager shows its wall, the site has
      * sent the reader to another page, e.g. its consent page, or the page could not be loaded. The reader deals with
-     * the visible page; the Reader View does not get around a wall. Asked again until the Article is there.
+     * the visible page. Asked again until the Article is there. Walls built by a page's scripts do not appear when
+     * the page is loaded as text and layout only (ADR 0002).
      */
     data object ShowPage : ReaderView
 
     /** The page is still loading its document, or its consent manager has not decided yet whether to show its wall: ask again shortly. */
     data object NotYet : ReaderView
 
-    /** Readability found no main content: the Original Page is shown instead. */
+    /**
+     * Readability found no main content, or the script could not report. Loaded as text and layout only, the reader
+     * is offered to load the complete page; loaded completely, the Original Page is shown instead (ADR 0002).
+     */
     data object Failed : ReaderView
 }
 

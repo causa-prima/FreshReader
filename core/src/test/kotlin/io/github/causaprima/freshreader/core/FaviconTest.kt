@@ -12,7 +12,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** What a list entry shows besides its title: the Feed's favicon. */
+/** What an Article's card in the list shows besides its title: its Feed's favicon. */
 class FaviconTest {
     private val server = FakeFreshRss().start()
 
@@ -36,7 +36,7 @@ class FaviconTest {
     private fun article(title: String) = core.articles.single { it.title == title }
 
     @Test
-    fun `an entry shows its Feed's favicon, as the Server delivers it`() = runBlocking<Unit> {
+    fun `an Article's card shows its Feed's favicon, as the Server delivers it`() = runBlocking<Unit> {
         server.addFeed("xkcd.com", category = "Pictures", icon = XKCD_ICON)
         server.addArticle("Elevators", feedTitle = "xkcd.com", published = NOW.epochSecond)
         logIn()
@@ -45,7 +45,7 @@ class FaviconTest {
     }
 
     @Test
-    fun `a Feed without a favicon of its own gets none, so that the entry can show a placeholder`() =
+    fun `a Feed without a favicon of its own gets none, so that the Article's card can show a placeholder`() =
         runBlocking<Unit> {
             server.addFeed("ComputerBase", category = "News", icon = null) // FreshRSS found none: its default icon
             server.addFeed("Golem.de", category = "News", icon = XKCD_ICON, iconListed = false)

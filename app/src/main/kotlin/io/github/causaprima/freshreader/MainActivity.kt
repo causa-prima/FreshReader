@@ -360,7 +360,7 @@ private fun ArticleListScreen(
                         SectionHeader(section, actions.categoryColour(section.category))
                     }
                     items(section.articles, key = { it.id }) { article ->
-                        ArticleEntry(article, last = article === section.articles.last(), actions)
+                        ArticleCard(article, last = article === section.articles.last(), actions)
                     }
                 }
                 if (total > 0) {
@@ -451,7 +451,7 @@ private fun SectionHeader(section: Section, colour: CategoryColour) {
  * Category keeps half again as much to the next header, as much as the header keeps to its first card.
  */
 @Composable
-private fun ArticleEntry(article: Article, last: Boolean, actions: ListActions) {
+private fun ArticleCard(article: Article, last: Boolean, actions: ListActions) {
     Box(
         Modifier.fillMaxWidth().padding(
             start = CARD_MARGIN, end = CARD_MARGIN,

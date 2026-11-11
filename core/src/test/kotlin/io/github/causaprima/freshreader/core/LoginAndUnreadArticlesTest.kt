@@ -17,10 +17,15 @@ class LoginAndUnreadArticlesTest {
     @TempDir
     lateinit var storeDir: File
 
-    private fun core() = Core(storeDir = storeDir, secretBox = secretBox)
+    private val cores = mutableListOf<Core>()
+
+    private fun core() = Core(storeDir = storeDir, secretBox = secretBox).also(cores::add)
 
     @AfterEach
-    fun stopServer() = server.close()
+    fun tearDown() {
+        cores.forEach(Core::close)
+        server.close()
+    }
 
     @Test
     fun `logging in with the API password shows the unread Articles, oldest first`() = runBlocking<Unit> {

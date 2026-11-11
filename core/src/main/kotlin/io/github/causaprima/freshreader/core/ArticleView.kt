@@ -52,7 +52,6 @@ private val ARTICLE_VIEW_STYLE = """
 """.trimIndent()
 
 private const val BONUS_TEXT = "bonus-text"
-private val PLAIN_HTTP = Regex("""^http://""", RegexOption.IGNORE_CASE)
 private val PLAIN_HTTP_IN_SRCSET = Regex("""(^|,)(\s*)http://""", RegexOption.IGNORE_CASE)
 
 /** Feed Content or a Reader View's main content as the Article View shows it, following the Feed's [settings]. */
@@ -71,7 +70,7 @@ private fun prepareContent(html: String, settings: FeedSettings): String {
  * requested over https instead; Dinosaur Comics, for one, embeds its comic over http. Links stay as they are.
  */
 private fun loadEmbedsOverHttps(content: Element) {
-    for (element in content.select("[src]")) element.attr("src", PLAIN_HTTP.replace(element.attr("src"), "https://"))
+    for (element in content.select("[src]")) element.attr("src", overHttps(element.attr("src")))
     for (element in content.select("[srcset]")) {
         element.attr("srcset", PLAIN_HTTP_IN_SRCSET.replace(element.attr("srcset")) { "${it.groupValues[1]}${it.groupValues[2]}https://" })
     }
@@ -92,6 +91,7 @@ private fun tameFixedWidths(content: Element) {
 private fun showBonusText(content: Element) {
     for (image in content.select("img[title]")) {
         val title = image.attr("title").trim()
+        if (title.isEmpty()) continue
         val alt = image.attr("alt").trim()
         val texts = listOf(title, alt).filter { it.isNotEmpty() }.distinct()
         // An image inside a link: the text goes after the link, so that tapping it does not open the link.

@@ -26,8 +26,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * or "x"; the fake insists on the real one, so the client doesn't depend on that leniency.
  */
 class FakeFreshRss : Dispatcher(), AutoCloseable {
-    /** [listed] = false: the Feed is missing from `subscription/list`, e.g. subscribed between two requests. */
     /**
+     * [listed] = false: the Feed is missing from `subscription/list`, e.g. subscribed between two requests.
      * [icon]: the favicon FreshRSS found for the Feed, or null if it found none and serves its default icon.
      * [iconListed] = false: `subscription/list` gives no `iconUrl`. [site]: the Feed's web site (`htmlUrl`).
      */

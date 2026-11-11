@@ -23,7 +23,10 @@ class CategorySectionsTest {
     }
 
     @AfterEach
-    fun stopServer() = server.close()
+    fun tearDown() {
+        core.close()
+        server.close()
+    }
 
     private fun refreshed(): List<Pair<String, List<String>>> = runBlocking {
         assertEquals(Outcome.Ok, core.refresh())
