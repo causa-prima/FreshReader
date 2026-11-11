@@ -62,6 +62,15 @@ class OriginalPageTest {
     }
 
     @Test
+    fun `a plain http link, which Android refuses to load, is used over https`() = runBlocking<Unit> {
+        // Dinosaur Comics links its comics over http; the site answers over https as well.
+        server.addArticle("Watchmen 2", feedTitle = "Dinosaur Comics!", published = 1_794_211_200, url = "http://www.qwantz.com/index.php?comic=4540")
+        assertEquals(Outcome.Ok, core.refresh())
+
+        assertEquals("https://www.qwantz.com/index.php?comic=4540", core.originalPageUrl(core.articles.single()))
+    }
+
+    @Test
     fun `if follow_it cannot be reached, its tracking link is used, which still leads there in a browser`() =
         runBlocking<Unit> {
             val article = addPostillon()
