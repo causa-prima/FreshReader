@@ -152,8 +152,12 @@ class Core(
     /** Whether credentials from an earlier successful login are stored on the device. */
     val hasStoredCredentials: Boolean get() = credentialStore.load() != null
 
-    /** The Server and user of the stored credentials, e.g. to offer them when changing the Server; null before a login. */
-    val account: Account? get() = credentialStore.load()?.let { Account(it.serverUrl, it.username) }
+    /**
+     * The Server, as its FreshRSS root URL, and user of the stored credentials, e.g. to offer them when changing the
+     * Server; null before a login.
+     */
+    val account: Account?
+        get() = credentialStore.load()?.let { Account(GoogleReaderApi.serverRoot(it.serverUrl) ?: it.serverUrl, it.username) }
 
     /**
      * Logs in with the API password; on success the credentials are stored encrypted. Logging in to another
@@ -161,19 +165,23 @@ class Core(
      * login keeps the previous credentials.
      */
     suspend fun logIn(serverUrl: String, username: String, apiPassword: String): Outcome {
-        val candidate = GoogleReaderApi.forServer(http, serverUrl) ?: return Outcome.InvalidServerUrl
+        val root = GoogleReaderApi.serverRoot(serverUrl) ?: return Outcome.InvalidServerUrl
+        val candidate = GoogleReaderApi.forServer(http, root) ?: return Outcome.InvalidServerUrl
         val outcome = candidate.logIn(username, apiPassword)
-        if (outcome == Outcome.Ok) {
+        if (outcome != Outcome.Ok) return outcome
+        // Under the session lock, so that no stored login replaces this one, and the previous Account's read marks are
+        // dropped before anything can be sent with the new one; see sendReadMarks.
+        sessionLock.withLock {
             val previous = account
-            credentialStore.save(Credentials(serverUrl, username, apiPassword))
-            api = candidate
-            if (previous != null && previous != Account(serverUrl, username)) {
+            if (previous != null && previous != Account(root, username)) {
                 outboxLock.withLock {
                     outbox.clear()
                     withContext(Dispatchers.IO) { outboxStore.save(outbox) }
                     _syncStatus.value = SyncStatus.Synced
                 }
             }
+            withContext(Dispatchers.IO) { credentialStore.save(Credentials(root, username, apiPassword)) }
+            api = candidate
         }
         return outcome
     }
@@ -242,9 +250,13 @@ class Core(
     private suspend fun sendReadMarks() {
         var retryDelay = firstRetryDelay
         while (true) {
-            val batch = outboxLock.withLock { outbox.take(READ_MARK_BATCH) }
-            if (batch.isEmpty()) return
-            val outcome = when (val session = session()) {
+            val taken = outboxLock.withLock { outbox.take(READ_MARK_BATCH) }
+            if (taken.isEmpty()) return
+            val session = session()
+            // A login to another Account in between has dropped the read marks taken, which were not its own.
+            val batch = outboxLock.withLock { taken.filter { it in outbox } }
+            if (batch.isEmpty()) continue
+            val outcome = when (session) {
                 is ApiResult.Success -> session.value.markRead(batch)
                 is ApiResult.Failure -> session.outcome
             }

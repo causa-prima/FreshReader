@@ -86,6 +86,17 @@ class ChangeServerTest {
         }
 
     @Test
+    fun `the same Server written another way is the same Server, so its read marks not yet sent are kept`() =
+        runBlocking<Unit> {
+            for (written in listOf("${oldServer.url}/", " ${oldServer.url}/api/greader.php ", oldServer.url.uppercase())) {
+                assertEquals(Outcome.Ok, core.logIn(written, "reader", "api-secret"), written)
+
+                assertEquals(SyncStatus.Pending(2), core.syncStatus.value, written)
+                assertEquals(Account(oldServer.url, "reader"), core.account, "kept as the Server's root: $written")
+            }
+        }
+
+    @Test
     fun `the current Server and user are offered for changing them, and a failed change keeps them`() =
         runBlocking<Unit> {
             assertEquals(Account(oldServer.url, "reader"), core.account)
