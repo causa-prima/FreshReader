@@ -43,11 +43,14 @@ sealed interface Screen {
     data class Failed(val outcome: Outcome) : Screen
     /**
      * The list snapshot. [focus]: id of the Article the list should bring into view, e.g. the last one shown
-     * in the Article View. [refreshError]: why the last pull-to-refresh failed, shown once; the list stays.
+     * in the Article View. [fromTop]: the list starts again at its top, as the Reading Order has changed: the reader
+     * would otherwise go on reading among Categories now placed above, which opening an Article marks as read.
+     * [refreshError]: why the last pull-to-refresh failed, shown once; the list stays.
      */
     data class Articles(
         val sections: List<Section>,
         val focus: String? = null,
+        val fromTop: Boolean = false,
         val refreshing: Boolean = false,
         val refreshError: Outcome? = null,
     ) : Screen
@@ -121,6 +124,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The last Reading Order or Category Colour change still being stored; applied one after another. */
     private var settingsChange: Job? = null
+    /** The Reading Order as the settings were opened with it. */
+    private var readingOrderBefore: List<String> = emptyList()
 
     /** The last Feed Settings change still being stored; changes are applied one after another. */
     private var feedSettingsChange: Job? = null
@@ -289,6 +294,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openSettings() {
         viewModelScope.launch {
+            readingOrderBefore = core.categories
             _screen.value = withColours(Screen.Settings(withContext(Dispatchers.IO) { core.account }, core.categories))
         }
     }
@@ -332,7 +338,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun closeSettings() {
         viewModelScope.launch {
             settingsChange?.join()
-            _screen.value = Screen.Articles(core.sections)
+            _screen.value = Screen.Articles(core.sections, fromTop = core.categories != readingOrderBefore)
         }
     }
 
