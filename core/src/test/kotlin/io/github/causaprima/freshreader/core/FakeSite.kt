@@ -10,10 +10,11 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Stands in for a Feed's web site: pages and files by path, each file with an ETag that a conditional request
- * (`If-None-Match`) is answered with 304 for.
+ * (`If-None-Match`) is answered with 304 for, or, if [file] says so, only with a date (`Last-Modified`, answered with
+ * 304 for `If-Modified-Since`).
  */
 class FakeSite : Dispatcher(), AutoCloseable {
-    private class File(val bytes: ByteArray, val contentType: String, val etag: String)
+    private class File(val bytes: ByteArray, val contentType: String, val etag: String?, val lastModified: String? = null)
 
     private val server = MockWebServer().also { it.dispatcher = this }
     private val files = ConcurrentHashMap<String, File>()
@@ -35,8 +36,10 @@ class FakeSite : Dispatcher(), AutoCloseable {
         files[path] = File(html.encodeToByteArray(), "text/html; charset=UTF-8", "\"page-${html.hashCode()}\"")
     }
 
-    fun file(path: String, bytes: ByteArray, contentType: String) {
-        files[path] = File(bytes, contentType, "\"${bytes.contentHashCode()}\"")
+    /** A file; [datedOnly] gives it no ETag but a `Last-Modified` date, as some sites do. */
+    fun file(path: String, bytes: ByteArray, contentType: String, datedOnly: Boolean = false) {
+        files[path] = if (datedOnly) File(bytes, contentType, etag = null, lastModified = "Tue, 10 Nov 2026 12:00:00 GMT")
+        else File(bytes, contentType, "\"${bytes.contentHashCode()}\"")
     }
 
     fun remove(path: String) {
@@ -49,11 +52,14 @@ class FakeSite : Dispatcher(), AutoCloseable {
         if (!reachable) return dropConnection
         val path = request.url.encodedPath
         val file = files[path] ?: return answer(path, MockResponse.Builder().code(404).body("Not Found").build())
-        if (request.headers["If-None-Match"] == file.etag) return answer(path, MockResponse.Builder().code(304).build())
+        val unchanged = file.etag != null && request.headers["If-None-Match"] == file.etag ||
+            file.lastModified != null && request.headers["If-Modified-Since"] == file.lastModified
+        if (unchanged) return answer(path, MockResponse.Builder().code(304).build())
         return answer(path, MockResponse.Builder()
             .code(200)
             .addHeader("Content-Type", file.contentType)
-            .addHeader("ETag", file.etag)
+            .apply { file.etag?.let { addHeader("ETag", it) } }
+            .apply { file.lastModified?.let { addHeader("Last-Modified", it) } }
             .body(okio.Buffer().write(file.bytes))
             .build())
     }

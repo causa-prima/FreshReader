@@ -85,4 +85,15 @@ class CategoryColourTest : LoggedInCoreTest() {
             assertEquals(before["Job"], core.categoryColour("Job"))
             assertEquals(before["Updates"], core.categoryColour("Updates"))
         }
+
+    @Test
+    fun `the Category below a chosen colour picks another one automatically`() = runBlocking<Unit> {
+        addCategories("Job", "Leisure", "News")
+        assertEquals(Outcome.Ok, core.refresh())
+        val ofLeisure = core.categoryColour("Leisure")
+
+        core.setCategoryColour("Job", ofLeisure)
+
+        assertNotEquals(ofLeisure, core.categoryColour("Leisure"))
+    }
 }
