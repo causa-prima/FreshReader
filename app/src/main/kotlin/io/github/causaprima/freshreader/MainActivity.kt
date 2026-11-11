@@ -320,6 +320,7 @@ private fun ArticleListScreen(
     val sections = list.sections
     val total = sections.sumOf { it.unreadCount }
     LaunchedEffect(list.focus) { if (list.focus != null) bringIntoView(listState, sections, list.focus) }
+    LaunchedEffect(list.fromTop) { if (list.fromTop) listState.scrollToItem(0) }
     val snackbars = remember { SnackbarHostState() }
     val refreshError = list.refreshError?.let { outcomeMessage(it) }
     LaunchedEffect(list.refreshError) {
