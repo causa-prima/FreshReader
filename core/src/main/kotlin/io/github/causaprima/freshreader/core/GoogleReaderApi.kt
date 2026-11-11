@@ -200,11 +200,16 @@ internal class GoogleReaderApi private constructor(private val http: OkHttpClien
         private val FEED_NAME_STAND_INS =
             STAND_INS + mapOf('，' to ',', '／' to '/', '？' to '?', '＼' to '\\', '；' to ';')
 
+        /**
+         * The Server's FreshRSS root URL, however the reader wrote it: with or without a trailing slash, with its
+         * `/api/greader.php` URL, in any case; null if it is not an http(s) URL.
+         */
+        fun serverRoot(serverUrl: String): String? =
+            serverUrl.trim().trimEnd('/').removeSuffix("/api/greader.php").toHttpUrlOrNull()?.toString()?.trimEnd('/')
+
         /** Accepts the FreshRSS root URL or its `/api/greader.php` URL; null if it is not an http(s) URL. */
         fun forServer(http: OkHttpClient, serverUrl: String): GoogleReaderApi? {
-            val base = serverUrl.trim().trimEnd('/').let {
-                if (it.endsWith("/api/greader.php")) it else "$it/api/greader.php"
-            }.toHttpUrlOrNull() ?: return null
+            val base = serverRoot(serverUrl)?.let { "$it/api/greader.php".toHttpUrlOrNull() } ?: return null
             return GoogleReaderApi(http, base)
         }
 
