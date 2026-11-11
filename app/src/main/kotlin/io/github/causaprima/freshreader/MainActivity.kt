@@ -120,12 +120,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.causaprima.freshreader.core.Article
+import io.github.causaprima.freshreader.core.ArticlePage
 import io.github.causaprima.freshreader.core.CategoryColour
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
-import io.github.causaprima.freshreader.core.PageLoad
 import io.github.causaprima.freshreader.core.overHttps
-import io.github.causaprima.freshreader.core.ReaderView
+import io.github.causaprima.freshreader.core.ReaderViewSession
+import io.github.causaprima.freshreader.core.ReaderViewState
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
 import io.github.causaprima.freshreader.core.ViewMode
@@ -136,7 +137,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.io.ByteArrayInputStream
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.math.abs
 
@@ -174,12 +174,11 @@ class MainActivity : ComponentActivity() {
                         ),
                     )
                     is Screen.ArticleView -> ArticleViewScreen(
-                        s, viewModel::articlePage,
+                        s,
                         ArticleViewActions(
+                            articlePage = viewModel::articlePage,
                             originalPageUrl = viewModel::originalPageUrl,
-                            readerViewScript = viewModel.readerViewScript,
                             readerView = viewModel::readerView,
-                            readerViewLoads = viewModel::readerViewLoads,
                             onShow = viewModel::showArticle,
                             onClose = viewModel::closeArticle,
                             onOpenFeedSettings = viewModel::openFeedSettings,
@@ -626,10 +625,9 @@ private fun SettingsHeading(text: String, modifier: Modifier = Modifier) {
 
 /** What the reader can do in the Article View. */
 private class ArticleViewActions(
+    val articlePage: suspend (Article) -> ArticlePage,
     val originalPageUrl: suspend (Article) -> String?,
-    val readerViewScript: String,
-    val readerView: (Article, String, PageLoad, String) -> ReaderView,
-    val readerViewLoads: (Boolean, String?) -> Boolean,
+    val readerView: (Article, String) -> ReaderViewSession,
     val onShow: (Int) -> Unit,
     val onClose: () -> Unit,
     val onOpenFeedSettings: () -> Unit,
@@ -644,7 +642,7 @@ private class ArticleViewActions(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ArticleViewScreen(view: Screen.ArticleView, page: (Article) -> ArticlePage, actions: ArticleViewActions) {
+private fun ArticleViewScreen(view: Screen.ArticleView, actions: ArticleViewActions) {
     BackHandler(onBack = actions.onClose)
     val pagerState = rememberPagerState(initialPage = view.position) { view.articles.size }
     LaunchedEffect(pagerState) { snapshotFlow { pagerState.settledPage }.collect { actions.onShow(it) } }
@@ -680,13 +678,17 @@ private fun ArticleViewScreen(view: Screen.ArticleView, page: (Article) -> Artic
             // A new renderer means new WebViews for every page.
             key(renderers) {
                 val isShown = index == pagerState.currentPage
-                when (val shown = remember(article.id, view.revision) { page(article) }) {
+                // Asked again when Feed Settings change; the page shown so far stays until the answer is there.
+                val page by produceState<ArticlePage?>(null, article.id, view.revision) { value = actions.articlePage(article) }
+                when (val shown = page) {
+                    null -> Centered { CircularProgressIndicator() }
                     is ArticlePage.FeedContent -> {
                         LaunchedEffect(Unit) { loaded[article.id] = Unit }
                         ArticleWebView(article, shown.document, onRendererGone)
                     }
-                    ArticlePage.ReaderView -> ReaderViewPage(
+                    is ArticlePage.ReaderView -> ReaderViewPage(
                         article,
+                        shown.pageUrl,
                         isShown,
                         loadNow = isShown || shownLoaded,
                         onLoaded = { loaded[article.id] = Unit },
@@ -694,9 +696,9 @@ private fun ArticleViewScreen(view: Screen.ArticleView, page: (Article) -> Artic
                         actions,
                         onRendererGone,
                     )
-                    ArticlePage.OriginalPage -> {
+                    is ArticlePage.OriginalPage -> {
                         LaunchedEffect(Unit) { loaded[article.id] = Unit }
-                        OriginalPageView(article, actions.originalPageUrl, onRendererGone)
+                        OriginalPageView(shown.pageUrl, onRendererGone)
                     }
                 }
             }
@@ -775,7 +777,7 @@ private fun FeedSettingsBottomSheet(sheet: FeedSettingsSheet, onChange: (FeedSet
             ViewModeOption(sheet, ViewMode.OriginalPage, R.string.view_mode_original_page, R.string.view_mode_original_page_hint, onChange)
         }
         HorizontalDivider(Modifier.padding(horizontal = 24.dp))
-        val bonusTextApplies = sheet.settings.viewMode != ViewMode.OriginalPage
+        val bonusTextApplies = sheet.settings.bonusTextApplies
         ListItem(
             headlineContent = { Text(stringResource(R.string.bonus_text)) },
             supportingContent = { Text(stringResource(R.string.bonus_text_hint)) },
@@ -822,9 +824,7 @@ private fun ViewModeOption(
  * consent given once stays given.
  */
 @Composable
-private fun OriginalPageView(article: Article, originalPageUrl: suspend (Article) -> String?, onRendererGone: () -> Unit) {
-    val url by produceState<String?>(null, article.id) { value = originalPageUrl(article) }
-    val link = url ?: return Centered { CircularProgressIndicator() }
+private fun OriginalPageView(link: String, onRendererGone: () -> Unit) {
     AndroidView(
         modifier = Modifier.fillMaxSize().keepPagerStill(),
         factory = { context -> inAppBrowser(context, onRendererGone).apply { loadUrl(link) } },
@@ -833,18 +833,16 @@ private fun OriginalPageView(article: Article, originalPageUrl: suspend (Article
 }
 
 /**
- * The Reader View. The Original Page loads in the in-app browser, hidden, as text and layout only (ADR 0002), and the
- * Core's script reports from it what to show, as soon as the page's document has been read: its main content, laid
- * out like Feed Content, after which the page is dropped; or, if the site sent the reader to another page, e.g. its
- * consent page, that page, loaded completely so that the reader can decide there, and checked every second until
- * the Article is back; or, if the page holds no main content, a hint that offers to load the complete page.
- * The page starts loading once it may [loadNow], and reports [onLoaded] once it no longer loads.
- * A neighbouring page that met a consent page waits until it is [shown] and then loads again, as the reader may have
- * consented on another page meanwhile.
+ * The Reader View of [article], from its Original Page at [pageUrl]: the in-app browser loads the page, hidden, and
+ * does what the Core's Reader View asks; see [ReaderViewSession]. Shown is what it decides: the main content, after
+ * which the page is dropped; the page itself, e.g. a consent page; or a hint that offers to load the complete page.
+ * The page starts loading once it may [loadNow], and reports [onLoaded] once it no longer loads. The reader sees
+ * it if it is [shown].
  */
 @Composable
 private fun ReaderViewPage(
     article: Article,
+    pageUrl: String,
     shown: Boolean,
     loadNow: Boolean,
     onLoaded: () -> Unit,
@@ -852,39 +850,34 @@ private fun ReaderViewPage(
     actions: ArticleViewActions,
     onRendererGone: () -> Unit,
 ) {
-    val url by produceState<String?>(null, article.id) { value = actions.originalPageUrl(article) }
-    val link = url ?: return Centered { CircularProgressIndicator() }
-    var browser by remember(link) { mutableStateOf<WebView?>(null) }
-    var pageChanges by remember(link) { mutableIntStateOf(0) }
-    var report by remember(link) { mutableStateOf<String?>(null) }
-    var state by remember(link) { mutableStateOf<ReaderView>(ReaderView.NotYet) }
-    // Read by the browser for each request, off the main thread.
-    val pageLoad = remember(link) { AtomicReference(PageLoad.TextAndLayout) }
+    val readerView = remember(article.id, pageUrl) { actions.readerView(article, pageUrl) }
+    val state by readerView.state.collectAsStateWithLifecycle()
+    var browser by remember(readerView) { mutableStateOf<WebView?>(null) }
+    var pageChanges by remember(readerView) { mutableIntStateOf(0) }
     val isShown by rememberUpdatedState(shown)
-    fun loadCompletely(page: WebView) {
-        pageLoad.set(PageLoad.Complete)
-        state = ReaderView.NotYet
-        page.reload()
+    fun loadCompletely() {
+        readerView.loadCompletely()
+        browser?.reload()
     }
     Box(Modifier.fillMaxSize().keepPagerStill()) {
         when (val current = state) {
             // The page is no longer needed: dropping it ends its scripts, and with them its ads, and frees its memory.
-            is ReaderView.Ready -> ArticleWebView(article, current.document, onRendererGone)
+            is ReaderViewState.Ready -> ArticleWebView(article, current.document, onRendererGone)
             else -> {
-                val loading = current == ReaderView.NotYet
-                val nothingFound = current == ReaderView.Failed && pageLoad.get() == PageLoad.TextAndLayout
                 AndroidView(
                     // Hidden unless it is to be shown: a WebView draws over Compose content placed on top of it. It
                     // stays visible to Android, so the page, and its consent manager, behave as on screen.
-                    modifier = Modifier.fillMaxSize().alpha(if (loading || nothingFound) 0f else 1f),
+                    modifier = Modifier.fillMaxSize().alpha(if (current == ReaderViewState.Page) 1f else 0f),
                     factory = { context ->
                         inAppBrowser(
                             context,
                             onRendererGone,
-                            onPageChanged = { pageChanges++ },
+                            onPageChanged = {
+                                readerView.pageChanged()
+                                pageChanges++
+                            },
                             letsThrough = { request ->
-                                pageLoad.get() == PageLoad.Complete ||
-                                    actions.readerViewLoads(request.isForMainFrame, request.requestHeaders["Accept"])
+                                readerView.letsThrough(request.url.toString(), request.isForMainFrame, request.requestHeaders["Accept"])
                             },
                         ).apply {
                             settings.blockNetworkImage = true
@@ -892,70 +885,60 @@ private fun ReaderViewPage(
                         }
                     },
                     // Images load once the page shows; until then they would only slow it down.
-                    update = { it.settings.blockNetworkImage = loading },
+                    update = { it.settings.blockNetworkImage = current == ReaderViewState.Loading },
                     onRelease = { it.destroy() },
                 )
-                when {
-                    loading -> Centered { CircularProgressIndicator() }
-                    nothingFound -> NothingFound(onLoadCompletely = { browser?.let(::loadCompletely) })
+                when (current) {
+                    ReaderViewState.Loading -> Centered { CircularProgressIndicator() }
+                    ReaderViewState.NothingFound -> CannotRead(R.string.reader_view_nothing_found, ::loadCompletely)
+                    ReaderViewState.Unreadable -> CannotRead(R.string.reader_view_unreadable, ::loadCompletely)
+                    else -> Unit
                 }
             }
         }
     }
-    var started by remember(link) { mutableStateOf(false) }
+    var started by remember(readerView) { mutableStateOf(false) }
     LaunchedEffect(browser, loadNow) {
         val page = browser ?: return@LaunchedEffect
         if (loadNow && !started) {
             started = true
-            page.loadUrl(link)
+            page.loadUrl(pageUrl)
         }
     }
-    LaunchedEffect(state) { if (state != ReaderView.NotYet) onLoaded() }
-    // Each page the browser shows, e.g. the Article after a consent page, is checked again until its document is read.
+    LaunchedEffect(state) { if (state != ReaderViewState.Loading) onLoaded() }
+    // Each page the browser shows, e.g. the Article after a consent page, is read until the Reader View is done with it.
     LaunchedEffect(browser, pageChanges) {
         val page = browser ?: return@LaunchedEffect
         if (pageChanges == 0) return@LaunchedEffect
-        var waited = 0L
-        while (state !is ReaderView.Ready) {
-            val latest = page.evaluate(actions.readerViewScript).also { report = it }
-            val result = actions.readerView(article, link, pageLoad.get(), latest)
-            state = if (result == ReaderView.NotYet && waited >= READER_VIEW_MAX_WAIT_MILLIS) ReaderView.Failed else result
-            val pause = when (state) {
-                ReaderView.NotYet -> READER_VIEW_RETRY_MILLIS
-                ReaderView.ShowPage -> {
-                    if (!isShown) {
-                        snapshotFlow { isShown }.first { it }
-                        page.reload()
-                        return@LaunchedEffect
-                    }
-                    // The reader decides on the page, e.g. a consent page, which needs its scripts for that.
-                    if (pageLoad.get() == PageLoad.TextAndLayout) {
-                        loadCompletely(page)
-                        return@LaunchedEffect
-                    }
-                    READER_VIEW_CONSENT_RETRY_MILLIS
+        while (true) {
+            when (val next = readerView.reported(page.evaluate(readerView.script), visible = isShown)) {
+                is ReaderViewSession.Next.CheckAgainIn -> delay(next.delay)
+                ReaderViewSession.Next.Reload -> {
+                    page.reload()
+                    return@LaunchedEffect
                 }
-                is ReaderView.Ready, ReaderView.Failed -> return@LaunchedEffect
+                ReaderViewSession.Next.ReloadWhenVisible -> {
+                    snapshotFlow { isShown }.first { it }
+                    page.reload()
+                    return@LaunchedEffect
+                }
+                ReaderViewSession.Next.Stop -> return@LaunchedEffect
             }
-            delay(pause)
-            waited += pause
         }
     }
     // Feed Settings changes, e.g. Bonus Text, prepare the same main content again.
-    LaunchedEffect(revision) {
-        val latest = report ?: return@LaunchedEffect
-        if (state is ReaderView.Ready) state = actions.readerView(article, link, pageLoad.get(), latest)
-    }
+    LaunchedEffect(revision) { readerView.prepareAgain() }
 }
 
 /**
- * The page, loaded as text and layout only, holds no main content, e.g. as the site builds its articles with scripts.
- * The reader sees that, rather than the page being loaded completely on its own, so that such Feeds can be fixed.
+ * The Reader View cannot show the page's main content, for the reason [message] gives, e.g. as the site builds its
+ * articles with scripts. The reader sees that, rather than the page being loaded completely on its own, so that such
+ * Feeds can be fixed.
  */
 @Composable
-private fun NothingFound(onLoadCompletely: () -> Unit) = Centered {
+private fun CannotRead(@StringRes message: Int, onLoadCompletely: () -> Unit) = Centered {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text(stringResource(R.string.reader_view_nothing_found), textAlign = TextAlign.Center)
+        Text(stringResource(message), textAlign = TextAlign.Center)
         Button(onClick = onLoadCompletely) { Text(stringResource(R.string.reader_view_load_completely)) }
     }
 }
@@ -1079,9 +1062,6 @@ private class KeepPagerStillNode : Modifier.Node(), BringIntoViewModifierNode {
 private val REFUSED: WebResourceResponse
     get() = WebResourceResponse("text/plain", "utf-8", 403, "Refused", emptyMap(), ByteArrayInputStream(ByteArray(0)))
 
-private const val READER_VIEW_RETRY_MILLIS = 250L
-private const val READER_VIEW_CONSENT_RETRY_MILLIS = 1000L
-private const val READER_VIEW_MAX_WAIT_MILLIS = 15_000L
 
 /** One Article's document in a WebView. JavaScript stays off, zoom is disabled, and links open in the browser. */
 @Composable

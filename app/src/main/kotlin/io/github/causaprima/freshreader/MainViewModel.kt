@@ -8,15 +8,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.causaprima.freshreader.core.Account
 import io.github.causaprima.freshreader.core.Article
+import io.github.causaprima.freshreader.core.ArticlePage
 import io.github.causaprima.freshreader.core.Core
 import io.github.causaprima.freshreader.core.CategoryColour
 import io.github.causaprima.freshreader.core.FeedSettings
 import io.github.causaprima.freshreader.core.Outcome
-import io.github.causaprima.freshreader.core.PageLoad
-import io.github.causaprima.freshreader.core.ReaderView
+import io.github.causaprima.freshreader.core.ReaderViewSession
 import io.github.causaprima.freshreader.core.Section
 import io.github.causaprima.freshreader.core.SyncStatus
-import io.github.causaprima.freshreader.core.ViewMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,18 +75,6 @@ sealed interface Screen {
     ) : Screen {
         val article: Article get() = articles[position]
     }
-}
-
-/** What one page of the Article View shows. */
-sealed interface ArticlePage {
-    /** The Core's prepared document: header and Feed Content. */
-    data class FeedContent(val document: String) : ArticlePage
-
-    /** The Article's web page reduced to its main content, extracted from the page in the in-app browser. */
-    data object ReaderView : ArticlePage
-
-    /** The Article's web page, in the in-app browser. */
-    data object OriginalPage : ArticlePage
 }
 
 /** The Feed Settings sheet for one Feed, showing its current [settings]. */
@@ -221,25 +208,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return withContext(Dispatchers.Default) { decodeFavicon(bytes) }?.also { favicons[article.feedId] = it }
     }
 
-    /** What the Article View shows for [article], following its Feed's View Mode. */
-    fun articlePage(article: Article): ArticlePage = when {
-        article.url == null -> ArticlePage.FeedContent(core.prepareArticleView(article))
-        else -> when (core.feedSettings(article.feedId).viewMode) {
-            ViewMode.FeedContent -> ArticlePage.FeedContent(core.prepareArticleView(article))
-            ViewMode.ReaderView -> ArticlePage.ReaderView
-            ViewMode.OriginalPage -> ArticlePage.OriginalPage
-        }
-    }
+    /** What the Article View shows of [article], following its Feed's View Mode. */
+    suspend fun articlePage(article: Article): ArticlePage = core.articlePage(article)
 
-    /** The script to run in a loaded Original Page for the Reader View. */
-    val readerViewScript: String get() = core.readerViewScript
-
-    /** What the Reader View shows of [article], from the script's [report] on the page loaded from [pageUrl] as [pageLoad]. */
-    fun readerView(article: Article, pageUrl: String, pageLoad: PageLoad, report: String): ReaderView =
-        core.readerView(article, pageUrl, pageLoad, report)
-
-    /** Whether the Reader View, loading a page as text and layout only, lets a request through. */
-    fun readerViewLoads(isPageItself: Boolean, accept: String?): Boolean = core.readerViewLoads(isPageItself, accept)
+    /** The Reader View of [article] from its Original Page at [pageUrl]. */
+    fun readerView(article: Article, pageUrl: String): ReaderViewSession = core.readerView(article, pageUrl)
 
     /** The link to [article]'s Original Page, tracking links unwrapped; null if the Feed gives none. */
     suspend fun originalPageUrl(article: Article): String? = core.originalPageUrl(article)

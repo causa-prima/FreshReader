@@ -49,8 +49,8 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         val read: Boolean = false,
         /** The Feed Content, as HTML. */
         val content: String = "<p>$title</p>",
-        /** The link to the Article's page, as the Feed delivers it. */
-        val url: String = "https://example.org/$id",
+        /** The link to the Article's page, as the Feed delivers it; null if it gives none. */
+        val url: String? = "https://example.org/$id",
     )
 
     var username = "reader"
@@ -112,10 +112,13 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
         read: Boolean = false,
         content: String = "<p>$title</p>",
         url: String? = null,
+        /** The Feed gives no link to the Article's page. */
+        withoutLink: Boolean = false,
     ) {
         if (feeds.none { it.title == feedTitle }) addFeed(feedTitle, "Uncategorized")
         val id = articles.size + 1L
-        articles += FakeArticle(id, title, feedTitle, published, read, content, url ?: "https://example.org/$id")
+        val link = if (withoutLink) null else url ?: "https://example.org/$id"
+        articles += FakeArticle(id, title, feedTitle, published, read, content, link)
     }
 
     /** Marks the Article [title] read on the Server itself, e.g. in FreshRSS's web interface. */
@@ -203,9 +206,11 @@ class FakeFreshRss : Dispatcher(), AutoCloseable {
                         put("crawlTimeMsec", "${a.id}000")
                         put("published", a.published)
                         put("title", a.title)
-                        putJsonArray("canonical") { addJsonObject { put("href", a.url) } }
-                        putJsonArray("alternate") {
-                            addJsonObject { put("href", a.url); put("type", "text/html") }
+                        a.url?.let { url ->
+                            putJsonArray("canonical") { addJsonObject { put("href", url) } }
+                            putJsonArray("alternate") {
+                                addJsonObject { put("href", url); put("type", "text/html") }
+                            }
                         }
                         putJsonArray("categories") {
                             add("user/-/state/com.google/reading-list")

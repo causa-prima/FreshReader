@@ -1,40 +1,192 @@
 package io.github.causaprima.freshreader.core
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.time.Clock
+import java.time.Instant
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.toKotlinDuration
 
-/** What the Article View shows of an Article in the Reader View, decided from the loaded Original Page. */
-sealed interface ReaderView {
-    /** The page's main content, prepared like Feed Content. */
-    data class Ready(val document: String) : ReaderView
+/** What the Article View shows of an Article, following its Feed's View Mode. */
+sealed interface ArticlePage {
+    /** The Core's prepared document: header and Feed Content. */
+    data class FeedContent(val document: String) : ArticlePage
 
-    /**
-     * The page itself is shown, as it is not, or not yet, the Article: a consent manager shows its wall, the site has
-     * sent the reader to another page, e.g. its consent page, or the page could not be loaded. The reader deals with
-     * the visible page. Asked again until the Article is there. Walls built by a page's scripts do not appear when
-     * the page is loaded as text and layout only (ADR 0002).
-     */
-    data object ShowPage : ReaderView
+    /** The Reader View of the Article's Original Page at [pageUrl]; see [ReaderViewSession]. */
+    data class ReaderView(val pageUrl: String) : ArticlePage
 
-    /** The page is still loading its document, or its consent manager has not decided yet whether to show its wall: ask again shortly. */
-    data object NotYet : ReaderView
-
-    /**
-     * Readability found no main content, or the script could not report. Loaded as text and layout only, the reader
-     * is offered to load the complete page; loaded completely, the Original Page is shown instead (ADR 0002).
-     */
-    data object Failed : ReaderView
+    /** The Article's Original Page at [pageUrl], in the in-app browser. */
+    data class OriginalPage(val pageUrl: String) : ArticlePage
 }
 
-/** How much of an Original Page the in-app browser loads for the Reader View. */
-enum class PageLoad {
-    /** Only the page itself and its stylesheets; see ADR 0002. */
-    TextAndLayout,
+/** What the Reader View shows the reader. */
+sealed interface ReaderViewState {
+    /** The page is loading, or being read; nothing to see yet. */
+    data object Loading : ReaderViewState
 
-    /** Everything, as a browser would: to let the reader consent, or when the reader asks for it. */
-    Complete,
+    /** The page's main content, prepared like Feed Content. */
+    data class Ready(val document: String) : ReaderViewState
+
+    /**
+     * The page itself, as it is not, or not yet, the Article: the site sent the reader to another page, e.g. its
+     * consent page, a consent manager shows its wall, the page could not be loaded, or, loaded completely, it holds no
+     * main content. The reader deals with the visible page.
+     */
+    data object Page : ReaderViewState
+
+    /** Loaded as text and layout only, the page holds no main content; the reader may load the complete page. */
+    data object NothingFound : ReaderViewState
+
+    /** The page could not be read, as the script did not report in time; the reader may load the complete page. */
+    data object Unreadable : ReaderViewState
+}
+
+/**
+ * The Reader View of one Article: drives the in-app browser that loads the Article's Original Page at [pageUrl], and
+ * decides what the reader sees (ADR 0002).
+ *
+ * The page loads as text and layout only: no scripts, ads, trackers, images or fonts. The browser runs [script] in the
+ * page once it has changed, [pageChanged], and hands the result to [reported], which says what to do next, until the
+ * main content is [ReaderViewState.Ready]. A page the site sent the reader to instead, e.g. its consent page, is
+ * loaded completely, so that the reader can decide there; the Article after it again as text and layout only.
+ * If the page holds no main content, or cannot be read within 15 s, the reader is told so and may [loadCompletely].
+ */
+class ReaderViewSession internal constructor(
+    val pageUrl: String,
+    /** Prepares the main content for the Article View, following the Feed Settings as they are then. */
+    private val prepare: (content: String) -> String,
+    private val clock: Clock,
+) {
+    /** What the browser does next, after a report. */
+    sealed interface Next {
+        /** Run the script again after [delay]. */
+        data class CheckAgainIn(val delay: Duration) : Next
+
+        /** Load the shown page again, now as far as [letsThrough] says. */
+        data object Reload : Next
+
+        /** Load the shown page again once the reader sees it: a neighbouring Article met a consent page. */
+        data object ReloadWhenVisible : Next
+
+        /** Nothing more to check, until the page changes. */
+        data object Stop : Next
+    }
+
+    private enum class PageLoad { TextAndLayout, ForConsent, Complete }
+
+    @Volatile
+    private var pageLoad = PageLoad.TextAndLayout
+    /** Whether the site has sent the reader to another page than the Article, e.g. its consent page. */
+    @Volatile
+    private var sentElsewhere = false
+    /** Whether the browser has asked for a page that it does not show yet; reports until then are of the page before. */
+    @Volatile
+    private var navigating = false
+    @Volatile
+    private var pageChangedAt: Instant = clock.instant()
+    private var content: String? = null
+    private val _state = MutableStateFlow<ReaderViewState>(ReaderViewState.Loading)
+
+    /** What the reader sees. */
+    val state: StateFlow<ReaderViewState> = _state
+
+    /** The script to run in the page; its result goes to [reported]. */
+    val script: String get() = READER_VIEW_SCRIPT
+
+    /**
+     * Whether the browser loads a request for [url]: the page itself, [isPageItself], or something it needs, by what
+     * it [accept]s. Loaded as text and layout only: the page and its stylesheets. Called off the main thread.
+     */
+    fun letsThrough(url: String, isPageItself: Boolean, accept: String?): Boolean {
+        if (isPageItself) {
+            navigating = true
+            // Once sent elsewhere: the Article loads as text and layout only, any other page completely.
+            if (sentElsewhere && pageLoad != PageLoad.Complete) {
+                pageLoad = if (isArticlePage(url)) PageLoad.TextAndLayout else PageLoad.ForConsent
+            }
+        }
+        return pageLoad != PageLoad.TextAndLayout || isPageItself || accept?.startsWith("text/css") == true
+    }
+
+    /** The browser shows another page, or has finished loading it: it is read again from now on. */
+    fun pageChanged() {
+        navigating = false
+        pageChangedAt = clock.instant()
+    }
+
+    /** The script's [report] from the page the browser shows, which the reader sees, if [visible], or not. */
+    fun reported(report: String, visible: Boolean): Next {
+        val page = pageReport(report) ?: return giveUp(ReaderViewState.Unreadable)
+        if (page.loading) return waitOrGiveUp()
+        if (page.url != null && !isSamePage(page.url, pageUrl)) return showPage(visible)
+        if (pageLoad != PageLoad.TextAndLayout) page.tcf?.let { consentManager ->
+            if (!consentManager.loaded) return waitOrGiveUp()
+            if (consentManager.displayStatus == "visible") return showPage(visible)
+        }
+        val found = page.content ?: return giveUp(ReaderViewState.NothingFound)
+        content = found
+        _state.value = ReaderViewState.Ready(prepare(found))
+        return Next.Stop
+    }
+
+    /**
+     * The reader asks for the complete page, e.g. as it holds no main content as text and layout only; the browser
+     * loads the page again.
+     */
+    fun loadCompletely() {
+        pageLoad = PageLoad.Complete
+        _state.value = ReaderViewState.Loading
+    }
+
+    /** Prepares the shown main content again, e.g. as the Feed Settings changed. */
+    fun prepareAgain() {
+        val found = content ?: return
+        if (_state.value is ReaderViewState.Ready) _state.value = ReaderViewState.Ready(prepare(found))
+    }
+
+    /** The site shows another page than the Article, or a wall over it: the reader deals with it. */
+    private fun showPage(visible: Boolean): Next {
+        if (!visible) return Next.ReloadWhenVisible
+        if (navigating) return Next.CheckAgainIn(CHECK) // e.g. the consent page, while the browser returns to the Article
+        if (pageLoad == PageLoad.TextAndLayout) {
+            sentElsewhere = true
+            pageLoad = PageLoad.ForConsent
+            _state.value = ReaderViewState.Loading
+            return Next.Reload
+        }
+        _state.value = ReaderViewState.Page
+        return Next.CheckAgainIn(CONSENT_CHECK)
+    }
+
+    private fun waitOrGiveUp(): Next {
+        if (java.time.Duration.between(pageChangedAt, clock.instant()).toKotlinDuration() < MAX_WAIT) return Next.CheckAgainIn(CHECK)
+        return giveUp(ReaderViewState.Unreadable)
+    }
+
+    /** Loaded as text and layout only, the reader is told [why]; loaded completely, the page is shown as it is. */
+    private fun giveUp(why: ReaderViewState): Next {
+        _state.value = if (pageLoad == PageLoad.TextAndLayout) why else ReaderViewState.Page
+        return Next.Stop
+    }
+
+    /** Whether [url] is the Article's page itself, on its own site, as after a consent page. */
+    private fun isArticlePage(url: String): Boolean {
+        val page = url.toHttpUrlOrNull() ?: return false
+        val article = pageUrl.toHttpUrlOrNull() ?: return false
+        return page.host == article.host && page.encodedPath.trimEnd('/') == article.encodedPath.trimEnd('/')
+    }
+
+    private companion object {
+        val CHECK = 250.milliseconds
+        val CONSENT_CHECK = 1.seconds
+        val MAX_WAIT = 15.seconds
+    }
 }
 
 /** What the Reader View script reports from the loaded Original Page. */

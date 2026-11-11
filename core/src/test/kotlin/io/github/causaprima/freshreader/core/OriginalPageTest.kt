@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 /** The link to an Article's Original Page, as used for showing, opening and sharing it. */
 class OriginalPageTest : LoggedInCoreTest() {
@@ -54,6 +55,33 @@ class OriginalPageTest : LoggedInCoreTest() {
 
         assertEquals("https://www.qwantz.com/index.php?comic=4540", core.originalPageUrl(core.articles.single()))
     }
+
+    @Test
+    fun `the Article View shows an Article as its Feed's View Mode says, the web pages from the Article's real page`() =
+        runBlocking<Unit> {
+            val article = addPostillon()
+            val realPage = "https://www.der-postillon.com/2016/10/1.-klasse-schneller.html"
+
+            assertEquals(ArticlePage.FeedContent(core.prepareArticleView(article)), core.articlePage(article))
+            core.setFeedSettings(article.feedId, FeedSettings(viewMode = ViewMode.ReaderView))
+            assertEquals(ArticlePage.ReaderView(realPage), core.articlePage(article))
+            core.setFeedSettings(article.feedId, FeedSettings(viewMode = ViewMode.OriginalPage))
+            assertEquals(ArticlePage.OriginalPage(realPage), core.articlePage(article))
+        }
+
+    @Test
+    fun `an Article whose Feed gives no link to its page is shown as Feed Content, whatever the View Mode`() =
+        runBlocking<Unit> {
+            server.addArticle("Notice", feedTitle = "Der Postillon", published = 1_793_989_276, withoutLink = true)
+            assertEquals(Outcome.Ok, core.refresh())
+            val article = core.articles.single()
+
+            for (viewMode in ViewMode.entries) {
+                core.setFeedSettings(article.feedId, FeedSettings(viewMode = viewMode))
+                assertIs<ArticlePage.FeedContent>(core.articlePage(article), "$viewMode")
+            }
+            assertEquals(null, core.originalPageUrl(article))
+        }
 
     @Test
     fun `if follow_it cannot be reached, its tracking link is used, which still leads there in a browser`() =

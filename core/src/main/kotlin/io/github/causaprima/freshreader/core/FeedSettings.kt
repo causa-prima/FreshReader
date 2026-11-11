@@ -11,7 +11,10 @@ data class FeedSettings(
     val viewMode: ViewMode = ViewMode.FeedContent,
     /** Show text the Feed hides in image titles and mail subjects visibly in the Article View. */
     val bonusText: Boolean = false,
-)
+) {
+    /** Whether [bonusText] applies: to Feed Content and the Reader View; the Original Page shows the site as it is. */
+    val bonusTextApplies: Boolean get() = viewMode != ViewMode.OriginalPage
+}
 
 /** How an Article is shown in the Article View. */
 @Serializable
